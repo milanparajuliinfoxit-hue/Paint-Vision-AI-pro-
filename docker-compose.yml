@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root_change_me
+      MYSQL_DATABASE: paint_visualizer
+      MYSQL_USER: paint_app
+      MYSQL_PASSWORD: change-me
+    ports:
+      - '3306:3306'
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./backend/src/sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    ports:
+      - '4000:4000'
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: paint_app
+      DB_PASSWORD: change-me
+      DB_NAME: paint_visualizer
+      UPLOAD_ROOT: /data/uploads
+      CORS_ORIGIN: http://localhost:5173
+    volumes:
+      - uploads_data:/data/uploads
+    depends_on:
+      - mysql
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - '5173:5173'
+    environment:
+      VITE_API_BASE_URL: http://localhost:4000
+    depends_on:
+      - backend
+
+volumes:
+  mysql_data:
+  uploads_data:
