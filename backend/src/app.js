@@ -10,21 +10,28 @@ const { errorHandler } = require('./middleware/errorHandler.middleware');
 
 const paintsRoutes = require('./routes/paints.routes');
 const importExportRoutes = require('./routes/importExport.routes');
-const visualizerRoutes = require('./routes/visualizer.routes');
 const projectsRoutes = require('./routes/projects.routes');
+const assetsRoutes = require('./routes/assets.routes');
+const layersRoutes = require('./routes/layers.routes');
+const exportsRoutes = require('./routes/exports.routes');
 
 const storage = require('./services/storage.service');
 
 const app = express();
 
-app.use(helmet());
+// The frontend runs on a different origin/port and loads photos, masks, and
+// exports as <img>/<canvas> sources for client-side recolor compositing —
+// helmet's default same-origin Cross-Origin-Resource-Policy would have the
+// browser block those loads even with CORS configured correctly, since CORP
+// is enforced independently of CORS.
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(morgan('combined'));
 app.use(express.json({ limit: '2mb' }));
 
 // Rate limit upload-heavy endpoints specifically.
 const uploadLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
-app.use('/api/visualizer/upload', uploadLimiter);
+app.use('/api/projects/:projectId/assets', uploadLimiter);
 app.use('/api/catalog/import', uploadLimiter);
 
 app.use('/api', requireAccessKey);
@@ -33,8 +40,10 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 app.use('/api/catalog', paintsRoutes);
 app.use('/api/catalog/import', importExportRoutes);
-app.use('/api/visualizer', visualizerRoutes);
 app.use('/api/projects', projectsRoutes);
+app.use('/api/assets', assetsRoutes);
+app.use('/api/layers', layersRoutes);
+app.use('/api/exports', exportsRoutes);
 
 // Serve stored images through a controlled route rather than exposing the
 // upload folder directly — keeps the door open for access control later.

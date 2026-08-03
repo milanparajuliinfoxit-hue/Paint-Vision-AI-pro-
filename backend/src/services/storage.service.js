@@ -45,6 +45,14 @@ function deleteFile(relativePath) {
   if (fs.existsSync(full)) fs.unlinkSync(full);
 }
 
+// Removes a folder if it's now empty — called after deleting the last file
+// in an asset's directory so deleted assets don't leave empty UUID folders
+// behind under UPLOAD_ROOT.
+function deleteDirIfEmpty(relativeDir) {
+  const full = absolutePath(relativeDir);
+  if (fs.existsSync(full) && fs.readdirSync(full).length === 0) fs.rmdirSync(full);
+}
+
 module.exports = {
   UPLOAD_ROOT,
   ensureDir,
@@ -53,4 +61,5 @@ module.exports = {
   readFile,
   exists,
   deleteFile,
+  deleteDirIfEmpty,
 };
