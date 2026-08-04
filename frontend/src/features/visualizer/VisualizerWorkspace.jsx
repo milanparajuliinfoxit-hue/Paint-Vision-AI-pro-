@@ -11,7 +11,9 @@ import { useImageElement } from './canvas/useImageElement';
 import { imageDataToPngBlob, mergeMasks } from './tools/maskOps';
 import { rgbToLab } from '../../shared/lib/colorEngine';
 import { assets as assetsApi } from '../../shared/lib/api';
-import { useAssetAnalysis, useSurfaceConstraintAlpha } from './hooks/useAiAnalysis';
+import { loadMaskImageData } from '../../shared/lib/maskImage';
+import { useAssetAnalysis, useSurfaceConstraintAlpha, useSurfaceAlphaGrids } from './hooks/useAiAnalysis';
+import { useApplySurface } from './hooks/useApplySurface';
 import { useToast } from '../../shared/ui/toast';
 import { useMediaQuery } from '../../shared/lib/useMediaQuery';
 
@@ -100,6 +102,27 @@ export default function VisualizerWorkspace({ onColorFocus }) {
     width,
     height,
   });
+
+  // Alpha grids of every paintable detected surface at canvas resolution —
+  // the surface-pick tool hit-tests a click against these to resolve which
+  // wall/roof/etc. the dealer clicked, then paints the whole surface.
+  const surfaceMasks = useSurfaceAlphaGrids({ analysis, width, height });
+  const { applySurface } = useApplySurface(projectId, activeAssetId, { width, height });
+
+  // Semantic painting: clicking a detected surface creates (or updates, via
+  // the idempotent AI-layer upsert) the whole-surface layer and paints it with
+  // the currently selected catalog color, if any.
+  async function handleSurfacePick(surface) {
+    try {
+      const paint = pendingColorId ? { id: pendingColorId } : null;
+      const layer = await applySurface(surface, paint);
+      showToast(layer
+        ? `Surface selected: ${surface.display_name || surface.class_key}${paint ? ' — painted with the selected catalog color.' : ' — pick a catalog color to paint it.'}`
+        : 'No paintable surface under the cursor.');
+    } catch (err) {
+      showToast(err.message || 'Could not apply surface.', { variant: 'danger' });
+    }
+  }
 
   // In-memory mask cache, keyed by layer id + the mask_path it was built
   // from. Without it every brush/eraser stroke re-downloaded the layer's
@@ -408,6 +431,8 @@ export default function VisualizerWorkspace({ onColorFocus }) {
             onCommitMask={handleCommitMask}
             onEyedropper={handleEyedropper}
             constraintAlpha={constraintAlpha}
+            surfaceMasks={surfaceMasks}
+            onSurfacePick={handleSurfacePick}
           />
         </div>
 
@@ -444,23 +469,6 @@ export default function VisualizerWorkspace({ onColorFocus }) {
       />
     </div>
   );
-}
-
-function loadMaskImageData(url, width, height) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, width, height);
-      resolve(ctx.getImageData(0, 0, width, height));
-    };
-    img.onerror = reject;
-    img.src = url;
-  });
 }
 
 function rgbToHex({ r, g, b }) {

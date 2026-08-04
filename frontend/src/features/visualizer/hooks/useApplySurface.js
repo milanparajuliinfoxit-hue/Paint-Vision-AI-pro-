@@ -2,6 +2,7 @@ import { useCreateLayer, useLayersList } from './useLayers';
 import { useHistoryCommand } from './useHistoryCommand';
 import { useVisualizerStore } from '../store/visualizerStore';
 import { assets as assetsApi } from '../../../shared/lib/api';
+import { surfaceMaskToPngBlob } from '../../../shared/lib/maskImage';
 
 // Applies AI-understanding results as real layers.
 //
@@ -11,6 +12,12 @@ import { assets as assetsApi } from '../../../shared/lib/api';
 // canvas resolution and the scheme's catalog paint — exactly the same
 // pipeline as a hand-drawn brush layer. Undo/redo work on these layers like
 // any other, because they are layers.
+//
+// Idempotency: every apply carries aiAnalysisId (+ aiSchemeId for schemes).
+// The server upserts on (ai_analysis_id, ai_surface_key), so re-applying the
+// same surface/scheme updates the existing layer instead of duplicating it.
+// Only a genuinely new layer gets a history commit — a re-apply just re-colors
+// the layer the dealer already has.
 export function useApplySurface(projectId, assetId, { width, height }) {
   const createLayer = useCreateLayer(assetId);
   const { commitCreate } = useHistoryCommand(projectId, assetId);
@@ -26,13 +33,14 @@ export function useApplySurface(projectId, assetId, { width, height }) {
         name: surface.display_name || surface.class_key,
         createdVia: 'ai-surface',
         aiSurfaceKey: surface.class_key,
+        aiAnalysisId: surface.analysis_id,
         currentColorId: paint?.id || undefined,
         orderIndex: layerList.length,
       },
       maskBlob: blob,
     });
     setActiveLayerId(layer.id);
-    commitCreate({ layerId: layer.id, createdVia: 'ai-surface' });
+    if (layer._created) commitCreate({ layerId: layer.id, createdVia: 'ai-surface' });
     return layer;
   }
 
@@ -50,13 +58,15 @@ export function useApplySurface(projectId, assetId, { width, height }) {
           name: surface.display_name || entry.surfaceClass,
           createdVia: 'ai-surface',
           aiSurfaceKey: surface.class_key,
+          aiAnalysisId: surface.analysis_id,
+          aiSchemeId: scheme.id,
           currentColorId: entry.paint?.id || undefined,
           orderIndex: index++,
         },
         maskBlob: await surfaceMaskToPngBlob(assetsApi.fileUrl(surface.mask_path), width, height),
       });
       lastLayer = layer;
-      commitCreate({ layerId: layer.id, createdVia: 'ai-surface' });
+      if (layer._created) commitCreate({ layerId: layer.id, createdVia: 'ai-surface' });
     }
     if (lastLayer) setActiveLayerId(lastLayer.id);
     return lastLayer;
@@ -65,22 +75,3 @@ export function useApplySurface(projectId, assetId, { width, height }) {
   return { applySurface, applyScheme };
 }
 
-// Draws the analysis-resolution alpha mask up onto a full-resolution canvas
-// and encodes it as a PNG blob — the same read-scale-encode path layer masks
-// already use, so the renderer never cares that the AI ran at 640px.
-function surfaceMaskToPngBlob(url, width, height) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, width, height);
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Mask encoding failed'))), 'image/png');
-    };
-    img.onerror = reject;
-    img.src = url;
-  });
-}

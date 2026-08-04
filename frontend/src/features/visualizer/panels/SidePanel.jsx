@@ -57,12 +57,12 @@ export default function SidePanel({ projectId, assetId, colorLookup, undoPointer
         </nav>
 
         <div className="flex-1 min-w-0 overflow-hidden">
-          {active === 'assets' && <AssetsTab projectId={projectId} activeAssetId={assetId} onSelectAsset={onSelectAsset} />}
+          {active === 'assets' && <AssetsTab projectId={projectId} activeAssetId={assetId} onSelectAsset={onSelectAsset} width={width} height={height} />}
           {active === 'layers' && <LayersTab projectId={projectId} assetId={assetId} colorLookup={colorLookup} />}
           {active === 'history' && <HistoryTab projectId={projectId} undoPointer={undoPointer} onJumpTo={onJumpTo} />}
           {active === 'ai' && <AISuggestionsTab projectId={projectId} assetId={assetId} baseImageData={baseImageData} width={width} height={height} />}
           {active === 'ai-analyze' && <AIAnalyzeTab projectId={projectId} assetId={assetId} width={width} height={height} />}
-          {active === 'recommendations' && <RecommendationsTab projectId={projectId} assetId={assetId} width={width} height={height} />}
+          {active === 'recommendations' && <RecommendationsTab projectId={projectId} assetId={assetId} width={width} height={height} baseImageData={baseImageData} />}
           {active === 'catalog' && <CatalogTab projectId={projectId} assetId={assetId} />}
           {active === 'favorites' && <FavoritesTab projectId={projectId} assetId={assetId} />}
           {active === 'collections' && <CollectionsTab projectId={projectId} assetId={assetId} />}

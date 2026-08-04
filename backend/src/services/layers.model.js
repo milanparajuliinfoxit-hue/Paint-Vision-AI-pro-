@@ -9,6 +9,35 @@ async function createLayer({ assetId, name, maskPath, createdVia, currentColorId
   return getLayer(result.insertId);
 }
 
+// Idempotent AI-surface layer apply. The (ai_analysis_id, ai_surface_key)
+// unique index guarantees one layer per surface per analysis: re-applying a
+// scheme or surface updates the existing row (color, scheme, order) in place —
+// and revives it if the dealer had deleted it — instead of inserting
+// duplicates. Returns { layer, created } so the controller can respond 201 vs
+// 200 and the client can skip a redundant history entry.
+async function upsertAiLayer({ assetId, name, maskPath, currentColorId, opacity, orderIndex, aiSurfaceKey, aiAnalysisId, aiSchemeId }) {
+  const [result] = await pool.query(
+    `INSERT INTO layers
+       (asset_id, name, mask_path, created_via, current_color_id, opacity, order_index,
+        ai_surface_key, ai_analysis_id, ai_scheme_id)
+     VALUES (?, ?, ?, 'ai-surface', ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       current_color_id = VALUES(current_color_id),
+       ai_scheme_id = VALUES(ai_scheme_id),
+       order_index = VALUES(order_index),
+       deleted_at = NULL,
+       updated_at = NOW(3)`,
+    [assetId, name, maskPath || null, currentColorId || null, opacity ?? 1, orderIndex ?? 0,
+      aiSurfaceKey, aiAnalysisId || null, aiSchemeId || null]
+  );
+
+  const [rows] = await pool.query(
+    `SELECT * FROM layers WHERE ai_analysis_id = ? AND ai_surface_key = ? LIMIT 1`,
+    [aiAnalysisId, aiSurfaceKey]
+  );
+  return { layer: rows[0] || null, created: result.affectedRows === 1 };
+}
+
 async function getLayer(id) {
   const [rows] = await pool.query('SELECT * FROM layers WHERE id = ? AND deleted_at IS NULL', [id]);
   return rows[0] || null;
@@ -88,6 +117,6 @@ async function restoreLayer(id) {
 }
 
 module.exports = {
-  createLayer, getLayer, getLayerIncludingDeleted, listLayersForAsset, listAllLayersForAsset,
+  createLayer, upsertAiLayer, getLayer, getLayerIncludingDeleted, listLayersForAsset, listAllLayersForAsset,
   updateLayer, deleteLayer, restoreLayer,
 };

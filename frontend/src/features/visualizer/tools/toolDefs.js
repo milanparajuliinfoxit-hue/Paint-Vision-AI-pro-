@@ -9,6 +9,7 @@ export const TOOL_GROUPS = [
       { id: 'lasso', label: 'Lasso', glyph: '◌', shortcut: 'l' },
       { id: 'polygon', label: 'Polygon', shortcut: 'g', glyph: '⬠' },
       { id: 'magic-wand', label: 'Magic Wand', glyph: '✦', shortcut: 'm' },
+      { id: 'surface-pick', label: 'Pick surface', glyph: '◎', shortcut: 's' },
     ],
   },
   {

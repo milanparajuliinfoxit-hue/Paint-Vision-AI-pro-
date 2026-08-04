@@ -374,3 +374,21 @@ export function imageDataToPngBlob(imageData) {
   canvas.getContext('2d').putImageData(imageData, 0, 0);
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
 }
+
+// Hit-tests a pointer against the AI-detected surface masks and returns the
+// topmost paintable surface whose alpha at that pixel is above `threshold`
+// (default: fully inside the mask). `surfaceMasks` is an array of
+// { surface, alpha } where alpha is the upscaled Uint8Array grid from
+// useSurfaceAlphaGrids. Order matters: later entries are "on top" (the same
+// stacking the layer pipeline uses), so the first hit wins.
+export function pickSurfaceAtPoint(surfaceMasks, x, y, threshold = 128) {
+  const ix = Math.round(x);
+  const iy = Math.round(y);
+  for (const entry of surfaceMasks || []) {
+    const { surface, alpha, width, height } = entry;
+    if (!alpha || !surface?.paintable) continue;
+    if (ix < 0 || iy < 0 || ix >= width || iy >= height) continue;
+    if (alpha[iy * width + ix] > threshold) return surface;
+  }
+  return null;
+}
