@@ -11,6 +11,7 @@ import { useImageElement } from './canvas/useImageElement';
 import { imageDataToPngBlob, mergeMasks } from './tools/maskOps';
 import { rgbToLab } from '../../shared/lib/colorEngine';
 import { assets as assetsApi } from '../../shared/lib/api';
+import { useAssetAnalysis, useSurfaceConstraintAlpha } from './hooks/useAiAnalysis';
 import { useToast } from '../../shared/ui/toast';
 import { useMediaQuery } from '../../shared/lib/useMediaQuery';
 
@@ -46,6 +47,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
   const pendingColorId = useVisualizerStore((s) => s.pendingColorId);
   const pendingColorRgb = useVisualizerStore((s) => s.pendingColorRgb);
   const setPendingColor = useVisualizerStore((s) => s.setPendingColor);
+  const aiSurfaceLock = useVisualizerStore((s) => s.aiSurfaceLock);
   const compareState = useVisualizerStore((s) => s.compareState);
   const setCompareState = useVisualizerStore((s) => s.setCompareState);
 
@@ -86,6 +88,18 @@ export default function VisualizerWorkspace({ onColorFocus }) {
   const { data: layerList = [] } = useLayersList(activeAssetId);
   const createLayer = useCreateLayer(activeAssetId);
   const { commitMaskEdit, commitCreate, undo, redo, jumpTo, undoPointer, canUndo, canRedo } = useHistoryCommand(projectId, activeAssetId);
+
+  // Surface lock: when the active layer came from AI analysis (it carries an
+  // ai_surface_key), clip brush strokes to that surface's detected mask so
+  // paint cannot escape the surface the AI identified.
+  const activeLayer = layerList.find((l) => l.id === activeLayerId);
+  const { data: analysis } = useAssetAnalysis(activeAssetId);
+  const constraintAlpha = useSurfaceConstraintAlpha({
+    analysis,
+    surfaceKey: aiSurfaceLock ? activeLayer?.ai_surface_key : null,
+    width,
+    height,
+  });
 
   // In-memory mask cache, keyed by layer id + the mask_path it was built
   // from. Without it every brush/eraser stroke re-downloaded the layer's
@@ -393,6 +407,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
             colorLookup={colorLookup}
             onCommitMask={handleCommitMask}
             onEyedropper={handleEyedropper}
+            constraintAlpha={constraintAlpha}
           />
         </div>
 

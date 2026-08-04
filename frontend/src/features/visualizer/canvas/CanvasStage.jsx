@@ -17,6 +17,7 @@ export default function CanvasStage({
   colorLookup,
   onCommitMask,
   onEyedropper,
+  constraintAlpha,
 }) {
   const containerRef = useRef(null);
   const stageRef = useRef(null);
@@ -35,7 +36,7 @@ export default function CanvasStage({
   const imageVisible = useVisualizerStore((s) => s.imageVisible);
   const fitSignal = useVisualizerStore((s) => s.fitSignal);
 
-  const tool = useToolInteraction({ width, height, baseImageData, onCommitMask, onEyedropper });
+  const tool = useToolInteraction({ width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha });
 
   useEffect(() => {
     if (!containerRef.current) return undefined;

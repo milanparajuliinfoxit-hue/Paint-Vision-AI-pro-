@@ -1,10 +1,10 @@
 const pool = require('../config/db');
 
-async function createLayer({ assetId, name, maskPath, createdVia, currentColorId, opacity, orderIndex }) {
+async function createLayer({ assetId, name, maskPath, createdVia, currentColorId, opacity, orderIndex, aiSurfaceKey }) {
   const [result] = await pool.query(
-    `INSERT INTO layers (asset_id, name, mask_path, created_via, current_color_id, opacity, order_index)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [assetId, name, maskPath || null, createdVia, currentColorId || null, opacity ?? 1, orderIndex ?? 0]
+    `INSERT INTO layers (asset_id, name, mask_path, created_via, current_color_id, opacity, order_index, ai_surface_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [assetId, name, maskPath || null, createdVia, currentColorId || null, opacity ?? 1, orderIndex ?? 0, aiSurfaceKey || null]
   );
   return getLayer(result.insertId);
 }
@@ -45,6 +45,7 @@ const FIELD_MAP = {
   currentColorId: 'current_color_id',
   opacity: 'opacity',
   finishOverride: 'finish_override',
+  aiSurfaceKey: 'ai_surface_key',
   orderIndex: 'order_index',
   locked: 'locked',
   visible: 'visible',

@@ -29,6 +29,7 @@ async function main() {
     "ALTER TABLE projects ADD COLUMN tags JSON NULL",
     "ALTER TABLE assets ADD COLUMN label VARCHAR(150) NULL AFTER project_id",
     "ALTER TABLE layers ADD COLUMN deleted_at TIMESTAMP(3) NULL",
+    "ALTER TABLE layers ADD COLUMN ai_surface_key VARCHAR(80) NULL AFTER finish_override",
   ];
   for (const stmt of upgradeColumns) {
     try {

@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { Image, Layers, History as HistoryIcon, Sparkles, Palette, Star, Bookmark, Tag, Droplet } from 'lucide-react';
+import { Image, Layers, History as HistoryIcon, Sparkles, Palette, Star, Bookmark, Tag, Droplet, BrainCircuit, Wand2 } from 'lucide-react';
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '../../../shared/ui/tooltip';
 import AssetsTab from './AssetsTab';
 import LayersTab from './LayersTab';
 import HistoryTab from './HistoryTab';
 import AISuggestionsTab from './AISuggestionsTab';
+import AIAnalyzeTab from './AIAnalyzeTab';
+import RecommendationsTab from './RecommendationsTab';
 import CatalogTab from './CatalogTab';
 import FavoritesTab from './FavoritesTab';
 import CollectionsTab from './CollectionsTab';
@@ -16,6 +18,8 @@ const SECTIONS = [
   { id: 'layers', label: 'Layers', Icon: Layers },
   { id: 'history', label: 'History', Icon: HistoryIcon },
   { id: 'ai', label: 'AI', Icon: Sparkles },
+  { id: 'ai-analyze', label: 'AI Understand', Icon: BrainCircuit },
+  { id: 'recommendations', label: 'AI Schemes', Icon: Wand2 },
   { id: 'catalog', label: 'Paint Catalog', Icon: Palette },
   { id: 'favorites', label: 'Favorites', Icon: Star },
   { id: 'collections', label: 'Collections', Icon: Bookmark },
@@ -57,6 +61,8 @@ export default function SidePanel({ projectId, assetId, colorLookup, undoPointer
           {active === 'layers' && <LayersTab projectId={projectId} assetId={assetId} colorLookup={colorLookup} />}
           {active === 'history' && <HistoryTab projectId={projectId} undoPointer={undoPointer} onJumpTo={onJumpTo} />}
           {active === 'ai' && <AISuggestionsTab projectId={projectId} assetId={assetId} baseImageData={baseImageData} width={width} height={height} />}
+          {active === 'ai-analyze' && <AIAnalyzeTab projectId={projectId} assetId={assetId} width={width} height={height} />}
+          {active === 'recommendations' && <RecommendationsTab projectId={projectId} assetId={assetId} width={width} height={height} />}
           {active === 'catalog' && <CatalogTab projectId={projectId} assetId={assetId} />}
           {active === 'favorites' && <FavoritesTab projectId={projectId} assetId={assetId} />}
           {active === 'collections' && <CollectionsTab projectId={projectId} assetId={assetId} />}

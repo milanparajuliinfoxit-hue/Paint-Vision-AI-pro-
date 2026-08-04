@@ -22,6 +22,8 @@ export default function Inspector({ projectId, assetId, onOpenExport }) {
   const setSurfaceAware = useVisualizerStore((s) => s.setSurfaceAware);
   const surfaceTolerance = useVisualizerStore((s) => s.surfaceTolerance);
   const setSurfaceTolerance = useVisualizerStore((s) => s.setSurfaceTolerance);
+  const aiSurfaceLock = useVisualizerStore((s) => s.aiSurfaceLock);
+  const setAiSurfaceLock = useVisualizerStore((s) => s.setAiSurfaceLock);
   const activeLayerId = useVisualizerStore((s) => s.activeLayerId);
 
   const { data: layerList = [] } = useLayersList(assetId);
@@ -86,6 +88,28 @@ export default function Inspector({ projectId, assetId, onOpenExport }) {
                 </p>
               </>
             )}
+            {activeLayer?.ai_surface_key && (
+              <div className="mt-4 flex items-center justify-between gap-2">
+                <label htmlFor="ai-surface-lock" className="text-xs text-[var(--graphite)]">Constrain to AI surface</label>
+                <button
+                  id="ai-surface-lock"
+                  role="switch"
+                  aria-checked={aiSurfaceLock}
+                  onClick={() => setAiSurfaceLock(!aiSurfaceLock)}
+                  className={`relative h-5 w-9 rounded-full transition-colors ${aiSurfaceLock ? 'bg-[var(--signal)]' : 'bg-[var(--line)]'}`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${aiSurfaceLock ? 'translate-x-[18px]' : 'translate-x-0.5'}`}
+                  />
+                </button>
+              </div>
+            )}
+            {activeLayer?.ai_surface_key && aiSurfaceLock && (
+              <p className="text-[11px] text-[var(--graphite)] leading-snug mt-2">
+                This layer came from AI analysis — strokes are locked inside the detected
+                “{activeLayer.ai_surface_key}” surface. Turn off for freehand refinement.
+              </p>
+            )}
           </section>
         )}
 
@@ -127,6 +151,11 @@ export default function Inspector({ projectId, assetId, onOpenExport }) {
                 className="rounded-[var(--radius-sm)] border border-[var(--line)] px-2 py-1"
               />
             </label>
+            {activeLayer.ai_surface_key && (
+              <p className="mb-2 inline-flex w-fit items-center rounded-[var(--radius-sm)] bg-[var(--signal)]/10 px-2 py-0.5 text-[10px] font-medium text-[var(--signal-dark)]">
+                AI surface · {activeLayer.ai_surface_key}
+              </p>
+            )}
             <label className="flex flex-col gap-1 text-xs mb-2">
               <span className="text-[var(--graphite)]">Opacity — {Math.round(Number(activeLayer.opacity) * 100)}%</span>
               <Slider

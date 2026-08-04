@@ -6,6 +6,22 @@ export function createEmptyMask(width, height) {
   return new ImageData(width, height);
 }
 
+// Clips a mask's alpha to a constraint grid (e.g. an AI-detected surface
+// mask): paint cannot escape the constrained region. `constraintAlpha` is a
+// Uint8Array of length width*height; pixels outside it keep only their
+// intersection with the constraint, so feathered edges fade against the
+// surface boundary instead of hard-clipping.
+export function clipMaskToConstraint(mask, constraintAlpha) {
+  if (!constraintAlpha || constraintAlpha.length !== mask.width * mask.height) return mask;
+  const out = new ImageData(mask.width, mask.height);
+  out.data.set(mask.data);
+  for (let i = 0; i < mask.data.length; i += 4) {
+    const c = constraintAlpha[i / 4] || 0;
+    if (out.data[i + 3] > c) out.data[i + 3] = c;
+  }
+  return out;
+}
+
 // Blurs just the alpha channel via a canvas blur filter, tapering a hard
 // 0/255 edge into a soft falloff a few pixels wide so painted regions blend
 // into the surrounding wall texture instead of cutting out like a sticker.
