@@ -18,6 +18,10 @@ export default function Inspector({ projectId, assetId, onOpenExport }) {
   const setBrushSize = useVisualizerStore((s) => s.setBrushSize);
   const magicWandTolerance = useVisualizerStore((s) => s.magicWandTolerance);
   const setMagicWandTolerance = useVisualizerStore((s) => s.setMagicWandTolerance);
+  const surfaceAware = useVisualizerStore((s) => s.surfaceAware);
+  const setSurfaceAware = useVisualizerStore((s) => s.setSurfaceAware);
+  const surfaceTolerance = useVisualizerStore((s) => s.surfaceTolerance);
+  const setSurfaceTolerance = useVisualizerStore((s) => s.setSurfaceTolerance);
   const activeLayerId = useVisualizerStore((s) => s.activeLayerId);
 
   const { data: layerList = [] } = useLayersList(assetId);
@@ -57,6 +61,47 @@ export default function Inspector({ projectId, assetId, onOpenExport }) {
             )}
             <label className="text-xs text-[var(--graphite)]">Brush size — {brushSize}px</label>
             <Slider min={10} max={200} value={[brushSize]} onValueChange={([v]) => setBrushSize(v)} />
+
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <label htmlFor="surface-aware" className="text-xs text-[var(--graphite)]">Surface-aware painting</label>
+              <button
+                id="surface-aware"
+                role="switch"
+                aria-checked={surfaceAware}
+                onClick={() => setSurfaceAware(!surfaceAware)}
+                className={`relative h-5 w-9 rounded-full transition-colors ${surfaceAware ? 'bg-[var(--signal)]' : 'bg-[var(--line)]'}`}
+              >
+                <span
+                  className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${surfaceAware ? 'translate-x-[18px]' : 'translate-x-0.5'}`}
+                />
+              </button>
+            </div>
+            {surfaceAware && (
+              <>
+                <label className="text-xs text-[var(--graphite)] mt-2">Boundary sensitivity — {surfaceTolerance}</label>
+                <Slider min={8} max={60} value={[surfaceTolerance]} onValueChange={([v]) => setSurfaceTolerance(v)} />
+                <p className="text-[11px] text-[var(--graphite)] leading-snug mt-2">
+                  Keeps paint inside walls and stops at railings, frames, glass, wires and other strong edges.
+                  Lower = stricter. Turn off for freehand work.
+                </p>
+              </>
+            )}
+          </section>
+        )}
+
+        {activeTool === 'eraser' && (
+          <section>
+            <h3 className="text-xs uppercase text-[var(--graphite)] mb-2">Eraser</h3>
+            {!activeLayerId && (
+              <p className="text-xs text-[var(--warning)] mb-2">
+                Select a layer first — the eraser only removes paint from the active layer.
+              </p>
+            )}
+            <label className="text-xs text-[var(--graphite)]">Eraser size — {brushSize}px</label>
+            <Slider min={10} max={200} value={[brushSize]} onValueChange={([v]) => setBrushSize(v)} />
+            <p className="text-[11px] text-[var(--graphite)] leading-snug mt-2">
+              Erases the active layer's paint only — it never touches the photo or other layers, and can be undone.
+            </p>
           </section>
         )}
 

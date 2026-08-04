@@ -9,14 +9,21 @@ export const useVisualizerStore = create((set, get) => ({
   brushSize: 60,
   magicWandTolerance: 24,
 
+  // Surface-aware brush: clips the brush footprint to the architectural
+  // surface under the stroke (stops at railings, frames, glass, sky/ground
+  // seams). On by default — it's the painting mode that makes the tool feel
+  // like painting a building rather than coloring an image.
+  surfaceAware: true,
+  surfaceTolerance: 22,
+
   viewport: { scale: 1, x: 0, y: 0 },
 
   activeAssetId: null,
   activeLayerId: null,
 
-  // The catalog color currently selected for painting — bucket fill and
-  // direct-paint brush strokes apply this; hover-preview (Section 6.1) reads
-  // it too without committing until click.
+  // The catalog color currently selected for painting — direct-paint brush
+  // strokes and new layers apply this; hover-preview (Section 6.1) reads it
+  // too without committing until click.
   pendingColorId: null,
   pendingColorRgb: null,
 
@@ -49,6 +56,8 @@ export const useVisualizerStore = create((set, get) => ({
   setBrushMode: (mode) => set({ brushMode: mode }),
   setBrushSize: (size) => set({ brushSize: size }),
   setMagicWandTolerance: (tolerance) => set({ magicWandTolerance: tolerance }),
+  setSurfaceAware: (on) => set({ surfaceAware: on }),
+  setSurfaceTolerance: (tolerance) => set({ surfaceTolerance: tolerance }),
   setViewport: (viewport) => set({ viewport }),
   setActiveAssetId: (id) => set({ activeAssetId: id, activeLayerId: null }),
   setActiveLayerId: (id) => set({ activeLayerId: id }),
