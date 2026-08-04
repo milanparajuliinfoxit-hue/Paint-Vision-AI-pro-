@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Stage, Layer, Image as KonvaImage, Rect, Line } from 'react-konva';
+import { Stage, Layer, Image as KonvaImage, Rect, Line, Circle } from 'react-konva';
 import LayerNode from './LayerNode';
 import { useToolInteraction } from '../tools/useToolInteraction';
 import { useVisualizerStore } from '../store/visualizerStore';
@@ -16,16 +16,17 @@ export default function CanvasStage({
   layers,
   colorLookup,
   onCommitMask,
-  onBucketFill,
   onEyedropper,
 }) {
   const containerRef = useRef(null);
   const stageRef = useRef(null);
   const [containerSize, setContainerSize] = useState({ width: 800, height: 600 });
   const [spaceDown, setSpaceDown] = useState(false);
+  const [hoverPos, setHoverPos] = useState(null);
 
   const activeTool = useVisualizerStore((s) => s.activeTool);
   const brushSize = useVisualizerStore((s) => s.brushSize);
+  const surfaceAware = useVisualizerStore((s) => s.surfaceAware);
   const viewport = useVisualizerStore((s) => s.viewport);
   const setViewport = useVisualizerStore((s) => s.setViewport);
   const activeLayerId = useVisualizerStore((s) => s.activeLayerId);
@@ -34,7 +35,7 @@ export default function CanvasStage({
   const imageVisible = useVisualizerStore((s) => s.imageVisible);
   const fitSignal = useVisualizerStore((s) => s.fitSignal);
 
-  const tool = useToolInteraction({ width, height, baseImageData, onCommitMask, onBucketFill, onEyedropper });
+  const tool = useToolInteraction({ width, height, baseImageData, onCommitMask, onEyedropper });
 
   useEffect(() => {
     if (!containerRef.current) return undefined;
@@ -121,6 +122,15 @@ export default function CanvasStage({
     };
   }
 
+  // Tracked independent of whether a stroke is in progress, purely so the
+  // brush/eraser size cursor below can follow the pointer at rest — the
+  // tool interaction hook only cares about points once a drag has started.
+  const handleHoverMove = stagePointerHandler((pt, evt) => {
+    setHoverPos(pt);
+    tool.handlePointerMove(pt, evt);
+  });
+  const showBrushCursor = (activeTool === 'brush' || activeTool === 'eraser') && hoverPos && !draggableStage;
+
   const showStage = width > 0 && height > 0 && baseImage;
 
   return (
@@ -177,8 +187,9 @@ export default function CanvasStage({
           onDragEnd={(e) => setViewport({ ...viewport, x: e.target.x(), y: e.target.y() })}
           onWheel={handleWheel}
           onMouseDown={stagePointerHandler(tool.handlePointerDown)}
-          onMouseMove={stagePointerHandler(tool.handlePointerMove)}
+          onMouseMove={handleHoverMove}
           onMouseUp={stagePointerHandler(() => tool.handlePointerUp())}
+          onMouseLeave={() => setHoverPos(null)}
           onDblClick={() => activeTool === 'polygon' && tool.commitPolygon()}
         >
           <Layer listening={false}>
@@ -227,6 +238,24 @@ export default function CanvasStage({
                 strokeWidth={brushSize}
                 lineCap="round"
                 lineJoin="round"
+                tension={0.4}
+                opacity={activeTool === 'brush' && surfaceAware && baseImageData ? 0 : 1}
+              />
+            )}
+            {/* Surface-aware live preview — the actual constrained fill, so
+                the user sees the wall-clipped paint while dragging instead
+                of a raw path that suggests it will cross railings. */}
+            {activeTool === 'brush' && surfaceAware && tool.isDrawing && tool.previewCanvas && (
+              <KonvaImage image={tool.previewCanvas} width={width} height={height} listening={false} opacity={0.92} />
+            )}
+            {showBrushCursor && (
+              <Circle
+                x={hoverPos.x}
+                y={hoverPos.y}
+                radius={brushSize / 2}
+                stroke={activeTool === 'eraser' ? 'rgba(200,60,60,0.9)' : 'rgba(47,93,138,0.9)'}
+                strokeWidth={1.5 / viewport.scale}
+                listening={false}
               />
             )}
           </Layer>

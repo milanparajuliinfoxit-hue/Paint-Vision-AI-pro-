@@ -15,7 +15,6 @@ export const TOOL_GROUPS = [
     label: 'Paint',
     tools: [
       { id: 'brush', label: 'Brush', glyph: '🖌', shortcut: 'b' },
-      { id: 'bucket', label: 'Bucket Fill', glyph: '🪣', shortcut: 'k' },
       { id: 'eraser', label: 'Eraser', glyph: '🧽', shortcut: 'e' },
     ],
   },
