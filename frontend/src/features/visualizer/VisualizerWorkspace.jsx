@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useProject } from '../projects/useProjects';
 import { useAssetsList } from './hooks/useAssets';
@@ -85,7 +85,61 @@ export default function VisualizerWorkspace({ onColorFocus }) {
 
   const { data: layerList = [] } = useLayersList(activeAssetId);
   const createLayer = useCreateLayer(activeAssetId);
-  const { commit, commitMaskEdit, commitCreate, undo, redo, jumpTo, undoPointer, canUndo, canRedo } = useHistoryCommand(projectId, activeAssetId);
+  const { commitMaskEdit, commitCreate, undo, redo, jumpTo, undoPointer, canUndo, canRedo } = useHistoryCommand(projectId, activeAssetId);
+
+  // In-memory mask cache, keyed by layer id + the mask_path it was built
+  // from. Without it every brush/eraser stroke re-downloaded the layer's
+  // PNG and merged against whatever mask_path the (possibly stale) query
+  // cache reported — two quick strokes could both merge against the *old*
+  // mask and the second one silently dropped the first (the "seams between
+  // strokes" defect). Merging against this cache is synchronous after the
+  // first fetch, so consecutive strokes always stack on the latest result.
+  // The path key auto-invalidates when history undo/redo re-points mask_path.
+  const maskCacheRef = useRef(new Map());
+  const clearMaskCache = () => maskCacheRef.current.clear();
+  useEffect(() => () => clearMaskCache(), []);
+  useEffect(() => { clearMaskCache(); }, [activeAssetId]);
+
+  async function getLayerMaskData(layer) {
+    const cached = maskCacheRef.current.get(layer.id);
+    if (cached && cached.path === layer.mask_path) return cached.imageData;
+    const imageData = await loadMaskImageData(assetsApi.fileUrl(layer.mask_path), width, height);
+    if (maskCacheRef.current.size >= 16) {
+      maskCacheRef.current.delete(maskCacheRef.current.keys().next().value);
+    }
+    maskCacheRef.current.set(layer.id, { path: layer.mask_path, imageData });
+    return imageData;
+  }
+
+  // Mask writes are serialized through a promise chain. Without it two quick
+  // strokes fire two PATCH requests that could complete out of order, and
+  // the server row would end up pointing at the older (less complete) mask
+  // even though the newest file was uploaded — a silent rollback of paint.
+  const maskWriteQueueRef = useRef(Promise.resolve());
+  function enqueueMaskWrite(work) {
+    const run = maskWriteQueueRef.current.then(work, work);
+    maskWriteQueueRef.current = run.catch(() => {});
+    return run;
+  }
+
+  // Read-merge-upload for a stroke on an existing layer. Uses the in-memory
+  // cache as the merge base so consecutive strokes always stack on the latest
+  // result (no per-stroke PNG refetch, no stale base).
+  function mergeMaskIntoLayer(layer, strokeMask, mode) {
+    return enqueueMaskWrite(async () => {
+      const existing = await getLayerMaskData(layer);
+      const merged = mergeMasks(existing, strokeMask, mode);
+      maskCacheRef.current.set(layer.id, { path: layer.mask_path, imageData: merged });
+      const blob = await imageDataToPngBlob(merged);
+      return commitMaskEdit({ action: 'mask-edited', layerId: layer.id, maskBlob: blob, beforeMaskPath: layer.mask_path });
+    });
+  }
+
+  // Undo/redo/jump re-point layer masks server-side; the cache key would
+  // collide (an undo back to an earlier path looks like a hit), so drop it.
+  const undoWithCache = () => { clearMaskCache(); undo(); };
+  const redoWithCache = () => { clearMaskCache(); redo(); };
+  const jumpToWithCache = (i) => { clearMaskCache(); jumpTo(i); };
 
   const { data: catalogData } = useCatalogList({ pageSize: 2000 });
   const catalogRows = catalogData?.rows || [];
@@ -106,17 +160,17 @@ export default function VisualizerWorkspace({ onColorFocus }) {
     function onKeyDown(e) {
       const meta = e.metaKey || e.ctrlKey;
       if (!meta) return;
-      if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
-      if ((e.key === 'z' && e.shiftKey) || e.key === 'y') { e.preventDefault(); redo(); }
+      if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); undoWithCache(); }
+      if ((e.key === 'z' && e.shiftKey) || e.key === 'y') { e.preventDefault(); redoWithCache(); }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [undo, redo]);
+  }, [undoWithCache, redoWithCache]);
 
   async function handleCommitMask(maskImageData, createdVia, opts = {}) {
-    // Dedicated eraser tool (Phase 6): always subtracts from the active
-    // layer's existing mask, regardless of brush mode/Alt state. Never
-    // touches the original photo — it only shrinks a paint mask.
+    // Dedicated eraser tool: always subtracts from the active layer's
+    // existing mask, regardless of brush mode/Alt state. Never touches the
+    // original photo or any other layer — it only shrinks a paint mask.
     if (createdVia === 'eraser') {
       if (!activeLayerId) {
         showToast('Select a layer first to erase paint from it.', { variant: 'danger' });
@@ -124,10 +178,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
       }
       const activeLayer = layerList.find((l) => l.id === activeLayerId);
       if (!activeLayer?.mask_path) return; // nothing painted on this layer yet
-      const existingMask = await loadMaskImageData(assetsApi.fileUrl(activeLayer.mask_path), width, height);
-      const merged = mergeMasks(existingMask, maskImageData, 'subtract');
-      const blob = await imageDataToPngBlob(merged);
-      await commitMaskEdit({ action: 'mask-edited', layerId: activeLayerId, maskBlob: blob, beforeMaskPath: activeLayer.mask_path });
+      await mergeMaskIntoLayer(activeLayer, maskImageData, 'subtract');
       return;
     }
 
@@ -135,15 +186,14 @@ export default function VisualizerWorkspace({ onColorFocus }) {
     // producing a new one (requirements doc, Section 5.2).
     if (createdVia === 'brush' && opts.brushMode === 'mask-edit' && activeLayerId) {
       const activeLayer = layerList.find((l) => l.id === activeLayerId);
-      let merged = maskImageData;
-      if (activeLayer?.mask_path) {
-        const existingMask = await loadMaskImageData(assetsApi.fileUrl(activeLayer.mask_path), width, height);
-        merged = mergeMasks(existingMask, maskImageData, opts.subtract ? 'subtract' : 'add');
-      } else if (opts.subtract) {
-        return; // nothing to subtract from
+      if (!activeLayer?.mask_path) {
+        if (opts.subtract) return; // nothing to subtract from
+        // First paint on this layer: no base to merge, just the stroke itself.
+        const blob = await imageDataToPngBlob(maskImageData);
+        await commitMaskEdit({ action: 'mask-edited', layerId: activeLayerId, maskBlob: blob, beforeMaskPath: null });
+        return;
       }
-      const blob = await imageDataToPngBlob(merged);
-      await commitMaskEdit({ action: 'mask-edited', layerId: activeLayerId, maskBlob: blob, beforeMaskPath: activeLayer?.mask_path });
+      await mergeMaskIntoLayer(activeLayer, maskImageData, opts.subtract ? 'subtract' : 'add');
       return;
     }
 
@@ -159,20 +209,6 @@ export default function VisualizerWorkspace({ onColorFocus }) {
     });
     setActiveLayerId(layer.id);
     commitCreate({ layerId: layer.id, createdVia });
-  }
-
-  function handleBucketFill() {
-    if (!activeLayerId || !pendingColorId) {
-      showToast('Select a layer and a catalog color first.', { variant: 'danger' });
-      return;
-    }
-    const activeLayer = layerList.find((l) => l.id === activeLayerId);
-    commit({
-      action: 'color-applied',
-      layerId: activeLayerId,
-      before: { currentColorId: activeLayer?.current_color_id ?? null },
-      after: { currentColorId: pendingColorId },
-    });
   }
 
   function handleEyedropper(pt) {
@@ -220,7 +256,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
       assetId={activeAssetId}
       colorLookup={colorLookup}
       undoPointer={undoPointer}
-      onJumpTo={jumpTo}
+      onJumpTo={jumpToWithCache}
       onSelectAsset={setActiveAssetId}
       baseImageData={baseImageData}
       width={width}
@@ -267,7 +303,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
           <TooltipProvider delayDuration={300}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button size="icon" variant="ghost" onClick={undo} disabled={!canUndo} aria-label="Undo">
+                <Button size="icon" variant="ghost" onClick={undoWithCache} disabled={!canUndo} aria-label="Undo">
                   <Undo2 size={15} />
                 </Button>
               </TooltipTrigger>
@@ -275,7 +311,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button size="icon" variant="ghost" onClick={redo} disabled={!canRedo} aria-label="Redo">
+                <Button size="icon" variant="ghost" onClick={redoWithCache} disabled={!canRedo} aria-label="Redo">
                   <Redo2 size={15} />
                 </Button>
               </TooltipTrigger>
@@ -356,7 +392,6 @@ export default function VisualizerWorkspace({ onColorFocus }) {
             layers={layerList}
             colorLookup={colorLookup}
             onCommitMask={handleCommitMask}
-            onBucketFill={handleBucketFill}
             onEyedropper={handleEyedropper}
           />
         </div>

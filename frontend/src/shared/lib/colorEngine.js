@@ -14,9 +14,17 @@
  */
 
 // --- sRGB <-> linear helpers -------------------------------------------------
+// srgbToLinear is only ever called with integer 0-255 channel bytes (from
+// ImageData or hexToRgb), so a 256-entry LUT replaces a Math.pow() call per
+// channel per pixel — meaningful on the applyPaintColor hot loop and on
+// hover-preview recomputes, with identical output to the formula version.
+const SRGB_TO_LINEAR_LUT = new Float64Array(256);
+for (let i = 0; i < 256; i++) {
+  const c = i / 255;
+  SRGB_TO_LINEAR_LUT[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
 function srgbToLinear(c) {
-  c /= 255;
-  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  return SRGB_TO_LINEAR_LUT[c < 0 ? 0 : c > 255 ? 255 : c];
 }
 function linearToSrgb(c) {
   const v = c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
@@ -56,6 +64,14 @@ export function rgbToLab(r, g, b) {
   const { x, y, z } = rgbToXyz(r, g, b);
   return xyzToLab(x, y, z);
 }
+
+// Lightness (L*) only, skipping the a/b math — used where only luminance is
+// needed (the paint-coverage mean in applyPaintColor), roughly a third of
+// the cost of a full LAB conversion.
+export function labL(r, g, b) {
+  const y = srgbToLinear(r) * 0.2126 + srgbToLinear(g) * 0.7152 + srgbToLinear(b) * 0.0722;
+  return 116 * fLab(y / REF_Y) - 16;
+}
 export function labToRgb(l, a, b) {
   const { x, y, z } = labToXyz(l, a, b);
   return xyzToRgb(x, y, z);
@@ -82,19 +98,49 @@ export function labDistance(a, b) {
  * @param {ImageData} maskData - same dimensions; alpha channel = selection strength (0-255)
  * @param {{r:number,g:number,b:number}} targetRgb - catalog paint color
  * @param {number} strength - 0..1, how strongly to pull toward the target color (default 0.85)
- * @param {{transparentOutsideMask?: boolean}} [opts] - when true, pixels
- *   outside the mask get alpha=0 instead of keeping the source image, so the
- *   result composites as one Konva layer among several stacked ones rather
- *   than a single flattened canvas (requirements doc, Section 5.2).
+ * @param {{
+ *   transparentOutsideMask?: boolean,
+ *   lightnessBlend?: number,
+ * }} [opts]
+ *   - `transparentOutsideMask`: when true, pixels outside the mask get
+ *     alpha=0 instead of keeping the source image, so the result composites
+ *     as one Konva layer among several stacked ones rather than a single
+ *     flattened canvas (requirements doc, Section 5.2).
+ *   - `lightnessBlend` (0..1): how much the paint's own lightness should
+ *     anchor the result. Plain per-pixel blending keeps the source's L
+ *     entirely, which makes paint read as a translucent overlay (a light
+ *     color over a dark wall stays dark). When > 0, the masked region's
+ *     mean lightness is shifted toward the target's while each pixel's
+ *     *relative* brightness (its shading offset from the wall mean) is
+ *     preserved — a real coat of paint that keeps texture and lighting.
  * @returns {ImageData} new ImageData with the recolor applied
  */
 export function applyPaintColor(imageData, maskData, targetRgb, strength = 0.85, opts = {}) {
-  const { transparentOutsideMask = false } = opts;
+  const { transparentOutsideMask = false, lightnessBlend = 0 } = opts;
   const { width, height, data } = imageData;
   const out = new ImageData(width, height);
   out.data.set(data);
 
   const targetLab = rgbToLab(targetRgb.r, targetRgb.g, targetRgb.b);
+
+  // Mean lightness of the masked region, computed on a sampled grid (every
+  // 3rd pixel) so the extra pass stays cheap. Used only when the paint is
+  // allowed to change the region's overall lightness.
+  let meanL = null;
+  if (lightnessBlend > 0) {
+    let sum = 0, count = 0;
+    for (let y = 0; y < height; y += 3) {
+      const row = y * width;
+      for (let x = 0; x < width; x += 3) {
+        const i = (row + x) * 4;
+        const a = maskData.data[i + 3];
+        if (a < 8) continue;
+        sum += labL(data[i], data[i + 1], data[i + 2]) * a;
+        count += a;
+      }
+    }
+    if (count > 0) meanL = sum / count;
+  }
 
   for (let i = 0; i < data.length; i += 4) {
     const maskAlpha = maskData.data[i + 3] / 255; // selection strength at this pixel
@@ -106,11 +152,20 @@ export function applyPaintColor(imageData, maskData, targetRgb, strength = 0.85,
     const r = data[i], g = data[i + 1], b = data[i + 2];
     const srcLab = rgbToLab(r, g, b);
 
-    // Keep the source's own lightness (shadows/highlights/texture); pull
-    // the color channels toward the target, scaled by mask strength * strength.
+    // Keep the source's own lightness relationship (shadows/highlights/
+    // texture), optionally re-anchored onto the paint's lightness; pull the
+    // color channels toward the target, scaled by mask strength * strength.
     const blend = maskAlpha * strength;
+    let l = srcLab.l;
+    if (lightnessBlend > 0 && meanL != null) {
+      // Fully-painted pixel = target lightness + the pixel's shading offset
+      // from the wall mean (scaled by how much shading to preserve), then
+      // eased in by the feather/blend so edges still wash in naturally.
+      const painted = targetLab.l + (srcLab.l - meanL) * (1 - lightnessBlend);
+      l = srcLab.l + (painted - srcLab.l) * blend;
+    }
     const newLab = {
-      l: srcLab.l, // preserve luminance entirely — this is what keeps it photorealistic
+      l,
       a: srcLab.a + (targetLab.a - srcLab.a) * blend,
       b: srcLab.b + (targetLab.b - srcLab.b) * blend,
     };

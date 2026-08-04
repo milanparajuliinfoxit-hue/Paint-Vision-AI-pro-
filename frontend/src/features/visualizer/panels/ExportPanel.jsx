@@ -52,8 +52,14 @@ export default function ExportPanel({
         const maskData = maskCtx.getImageData(0, 0, width, height);
 
         const rgb = colorLookup(layer.current_color_id) || { r: 47, g: 93, b: 138 };
-        const strength = colorLookup(layer.current_color_id) ? 0.85 : 0.35;
-        const recolored = applyPaintColor(baseImageData, maskData, rgb, strength, { transparentOutsideMask: true });
+        // Same parameters as LayerNode so the exported file matches what the
+        // canvas shows — full pigment coverage + lightness re-anchoring.
+        const painted = !!colorLookup(layer.current_color_id);
+        const strength = painted ? 0.95 : 0.35;
+        const recolored = applyPaintColor(baseImageData, maskData, rgb, strength, {
+          transparentOutsideMask: true,
+          lightnessBlend: painted ? 0.45 : 0,
+        });
 
         const layerCanvas = document.createElement('canvas');
         layerCanvas.width = width;

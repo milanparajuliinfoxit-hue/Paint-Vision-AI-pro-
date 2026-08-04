@@ -1,17 +1,20 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useVisualizerStore } from '../store/visualizerStore';
-import { rasterizeRect, rasterizePolygon, rasterizeBrushStroke, floodFillMask } from './maskOps';
+import { rasterizeRect, rasterizePolygon, rasterizeBrushStroke, surfaceAwareBrushStroke, floodFillMask } from './maskOps';
 import { rgbToLab } from '../../../shared/lib/colorEngine';
 
 // Owns the transient, in-progress interaction for whichever tool is active
 // (drag rect, lasso path, polygon points, brush stroke). Selection tools all
-// resolve to a finished mask handed to onCommitMask — nothing paints
-// directly except bucket fill (requirements doc, Section 5.2).
-export function useToolInteraction({ width, height, baseImageData, onCommitMask, onBucketFill, onEyedropper }) {
+// resolve to a finished mask handed to onCommitMask (requirements doc,
+// Section 5.2); color application itself happens on catalog click
+// (useApplyColor), not through a canvas tool.
+export function useToolInteraction({ width, height, baseImageData, onCommitMask, onEyedropper }) {
   const activeTool = useVisualizerStore((s) => s.activeTool);
   const brushMode = useVisualizerStore((s) => s.brushMode);
   const brushSize = useVisualizerStore((s) => s.brushSize);
   const magicWandTolerance = useVisualizerStore((s) => s.magicWandTolerance);
+  const surfaceAware = useVisualizerStore((s) => s.surfaceAware);
+  const surfaceTolerance = useVisualizerStore((s) => s.surfaceTolerance);
 
   const [dragStart, setDragStart] = useState(null);
   const [dragCurrent, setDragCurrent] = useState(null);
@@ -19,24 +22,72 @@ export function useToolInteraction({ width, height, baseImageData, onCommitMask,
   const [brushPoints, setBrushPoints] = useState([]);
   const [subtractStroke, setSubtractStroke] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
+  // Canvas the surface-aware brush renders its constrained fill into so the
+  // user sees exactly what will be painted *while* dragging, not after.
+  const [previewCanvas, setPreviewCanvas] = useState(null);
+
+  const lastPreviewAt = useRef(0);
+  const windowUpRef = useRef(null);
+  // Mutable mirror of the in-progress stroke so preview/commit always see
+  // the *latest* points synchronously (state would lag one render behind a
+  // fast drag), while `brushPoints` state drives the Konva preview overlay.
+  const brushPointsRef = useRef([]);
 
   function reset() {
     setDragStart(null);
     setDragCurrent(null);
     setPolygonPoints([]);
+    brushPointsRef.current = [];
     setBrushPoints([]);
     setSubtractStroke(false);
     setIsDrawing(false);
+    setPreviewCanvas(null);
+    if (windowUpRef.current) {
+      window.removeEventListener('mouseup', windowUpRef.current);
+      windowUpRef.current = null;
+    }
+  }
+
+  // Strokes must not get stuck if the pointer is released outside the Stage
+  // (a fast flick off the canvas edge). A window-level mouseup finalizes the
+  // stroke regardless; it self-removes, and reset() also removes it so an
+  // in-canvas release (handled by the Stage's onMouseUp) never double-fires.
+  function armWindowUp() {
+    if (windowUpRef.current) return;
+    const fn = () => {
+      window.removeEventListener('mouseup', fn);
+      windowUpRef.current = null;
+      handlePointerUp();
+    };
+    windowUpRef.current = fn;
+    window.addEventListener('mouseup', fn);
+  }
+
+  // Throttled live preview of the surface-aware brush: recompute the
+  // constrained fill at most a handful of times a second while dragging.
+  // Cheap for typical strokes (the fill stays inside the stroke's bbox), and
+  // large strokes fall back to the raw path preview rather than jank the drag.
+  function refreshPreview(nextPoints) {
+    if (!surfaceAware || !baseImageData || nextPoints.length < 2) return;
+    const now = performance.now();
+    if (now - lastPreviewAt.current < 150) return;
+    lastPreviewAt.current = now;
+    const mask = surfaceAwareBrushStroke(baseImageData, width, height, nextPoints, brushSize, surfaceTolerance, rgbToLab);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext('2d').putImageData(mask, 0, 0);
+    setPreviewCanvas(canvas);
   }
 
   function handlePointerDown(pt, evt) {
     if (!width || !height) return;
     switch (activeTool) {
       case 'rect':
-        setDragStart(pt); setDragCurrent(pt); setIsDrawing(true);
+        setDragStart(pt); setDragCurrent(pt); setIsDrawing(true); armWindowUp();
         break;
       case 'lasso':
-        setIsDrawing(true); setPolygonPoints([pt]);
+        setIsDrawing(true); setPolygonPoints([pt]); armWindowUp();
         break;
       case 'polygon':
         setPolygonPoints((prev) => [...prev, pt]);
@@ -44,8 +95,11 @@ export function useToolInteraction({ width, height, baseImageData, onCommitMask,
       case 'brush':
       case 'eraser':
         setIsDrawing(true);
+        brushPointsRef.current = [pt];
         setBrushPoints([pt]);
         setSubtractStroke(!!evt?.altKey);
+        lastPreviewAt.current = 0;
+        armWindowUp();
         break;
       case 'magic-wand': {
         if (!baseImageData) return;
@@ -55,9 +109,6 @@ export function useToolInteraction({ width, height, baseImageData, onCommitMask,
         onCommitMask(mask, 'magic-wand', {});
         break;
       }
-      case 'bucket':
-        onBucketFill?.();
-        break;
       case 'eyedropper':
         onEyedropper?.(pt);
         break;
@@ -70,7 +121,11 @@ export function useToolInteraction({ width, height, baseImageData, onCommitMask,
     if (!isDrawing) return;
     if (activeTool === 'rect') setDragCurrent(pt);
     if (activeTool === 'lasso') setPolygonPoints((prev) => [...prev, pt]);
-    if (activeTool === 'brush' || activeTool === 'eraser') setBrushPoints((prev) => [...prev, pt]);
+    if (activeTool === 'brush' || activeTool === 'eraser') {
+      brushPointsRef.current.push(pt);
+      setBrushPoints([...brushPointsRef.current]);
+      if (activeTool === 'brush') refreshPreview(brushPointsRef.current);
+    }
   }
 
   function handlePointerUp() {
@@ -82,16 +137,21 @@ export function useToolInteraction({ width, height, baseImageData, onCommitMask,
       const mask = rasterizePolygon(width, height, polygonPoints);
       onCommitMask(mask, 'lasso', {});
       reset();
-    } else if (activeTool === 'eraser' && brushPoints.length > 0) {
-      const strokeMask = rasterizeBrushStroke(width, height, brushPoints, brushSize);
+    } else if (activeTool === 'eraser' && brushPointsRef.current.length > 0) {
+      const strokeMask = rasterizeBrushStroke(width, height, brushPointsRef.current, brushSize);
       onCommitMask(strokeMask, 'eraser', {});
       reset();
-    } else if (activeTool === 'brush' && brushPoints.length > 0) {
-      const strokeMask = rasterizeBrushStroke(width, height, brushPoints, brushSize);
+    } else if (activeTool === 'brush' && brushPointsRef.current.length > 0) {
+      // The surface-aware brush clips the footprint to the wall under the
+      // stroke; toggling it off restores the raw footprint for fine work.
+      const strokeMask = surfaceAware && baseImageData
+        ? surfaceAwareBrushStroke(baseImageData, width, height, brushPointsRef.current, brushSize, surfaceTolerance, rgbToLab)
+        : rasterizeBrushStroke(width, height, brushPointsRef.current, brushSize);
       onCommitMask(strokeMask, 'brush', { brushMode, subtract: subtractStroke });
       reset();
     } else {
       setIsDrawing(false);
+      setPreviewCanvas(null);
     }
   }
 
@@ -118,6 +178,7 @@ export function useToolInteraction({ width, height, baseImageData, onCommitMask,
     dragCurrent,
     polygonPoints,
     brushPoints,
+    previewCanvas,
     isDrawing,
   };
 }
