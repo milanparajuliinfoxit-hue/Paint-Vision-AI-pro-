@@ -1,75 +1,65 @@
-# Paint Dealer Visualizer — v1 Scaffold
+# Paint Dealer Visualizer — v2
 
-Monolithic, single-dealer, no-auth app with two modules: **Color Catalog Management** and **AI Paint Visualizer**.
+A project-centric AI visualization platform for paint dealers: a persistent, layer-based
+photo workspace where a dealer masks surfaces, tries catalog colors in real time, and
+exports a client-ready comparison — nothing is lost on refresh.
 
-## Architecture (as implemented)
+This supersedes the v1 scaffold (single-page 4-step wizard, no persistence). See `v2.md`
+for the full product/engineering spec this implements.
 
-- **Client does the image work.** All pixel-level processing — applying a
-  catalog color to a selected surface — runs in the browser on `<canvas>`
-  using a LAB-color-space blend that preserves the original photo's shading
-  and texture (`frontend/src/lib/colorEngine.js`). Nothing in this pipeline
-  touches the server.
-- **AI color suggestions are also client-side** — a rule-based engine
-  (`frontend/src/lib/colorSuggest.js`) samples the untouched parts of the
-  photo and matches catalog colors using color theory (complementary/analogous
-  hues), not a black-box model call.
-- **Server = storage + a thin AI proxy.** The backend is a plain CRUD API
-  (catalog, projects, job metadata) backed by MySQL, plus local-disk file
-  storage. The one place it talks to AI is `POST /api/visualizer/jobs/:id/cleanup`,
-  which forwards the image to a **hosted AI API (Path B)** and stores the
-  result — it does not run any model itself. This exists only because a
-  vendor API key can't safely live in the browser bundle.
+## Architecture
 
 ```
-frontend (React/Vite)  ──HTTP──▶  backend (Express)  ──HTTP──▶  hosted AI API (cleanup/inpainting)
-        │                              │
-   <canvas> recolor              MySQL (catalog, jobs)
-   (client-side, no                 + local /data/uploads
-    server round trip)
+frontend (React/Vite, Konva canvas)  ──HTTP──▶  backend (Express)  ──HTTP──▶  hosted AI API (cleanup)
+        │                                            │
+   layer compositing,                          MySQL (catalog, projects,
+   client-side LAB recolor                     assets, layers, history,
+   (no server round trip)                       concepts, exports)
+                                                   + local /uploads
 ```
 
-## What's implemented in this scaffold
+- **Client does the image work**, same as v1: applying a catalog color to a masked
+  surface runs in the browser on `<canvas>` using a LAB-color-space blend
+  (`frontend/src/shared/lib/colorEngine.js`) that preserves the photo's shading/texture.
+  Each `Layer` composites independently (Konva), so changing one layer's color
+  re-renders only that layer, not the whole canvas.
+- **Server = storage + a thin AI proxy**, unchanged in spirit: plain CRUD (catalog,
+  projects, assets, layers, history, concepts, exports) backed by MySQL plus local-disk
+  file storage. The only AI call is `POST /api/assets/:id/clean`, forwarded to a hosted
+  provider (Clipdrop/Hugging Face) — no image processing happens in this process.
+- **No auth/RBAC** — single-editor, no login, matching v1's model (explicit product
+  decision for this phase; see `v2.md` §10 for the deferred role model).
+
+## Data model
+
+`projects` → `assets` (original + AI-cleaned photo) → `layers` (masked, re-colorable
+surface regions) — plus `history_entries` (undo/redo log), `concepts` (saved "looks"),
+and `export_jobs`. Full schema: `backend/src/sql/schema.sql`.
+
+## What's implemented
 
 | Area | Status |
 |---|---|
-| Catalog CRUD (list/search/filter/create/update/soft-delete) | ✅ working |
-| Excel import — preview/diff, duplicate strategy, commit | ✅ working |
-| Excel export | ✅ working |
-| MySQL schema (paints, projects, visualization_jobs, job_results) | ✅ working |
-| Local folder storage service (swappable for S3 later) | ✅ working |
-| Image upload → job creation | ✅ working |
-| AI cleanup proxy endpoint | ✅ wired, **needs a real API key** — see below |
-| Client-side surface selection | ✅ working (manual brush tool, v1) |
-| Client-side recolor engine (LAB blend) | ✅ working |
-| Client-side AI color suggestions (rule-based) | ✅ working, tune-able |
-| Save final look back to server | ✅ working |
-| Dealer UI (catalog + visualizer pages) | ✅ working, styled per design tokens |
+| Catalog CRUD, Excel import/export | ✅ working (unchanged from v1) |
+| Project-centric IA (Dashboard / Projects / `/projects/:id/visualize`) | ✅ working |
+| Konva canvas: layers-with-masks, live per-layer recolor | ✅ working |
+| Selection tools: rect, lasso, polygon, magic wand, brush (mask-edit + direct-paint), bucket fill, eyedropper | ✅ working |
+| Undo/redo (command pattern) + scrubbable History tab | ✅ working |
+| Autosave (optimistic + debounced) + IndexedDB draft cache + conflict toast | ✅ working |
+| Paint Catalog cards, favorites/recently-used (localStorage), hex-proximity search, hover-preview | ✅ working |
+| Layer-aware AI color suggestions (samples outside the active layer's actual mask) | ✅ working |
+| Comparison modes (side-by-side/slider/split/fade) + PNG/side-by-side-JPG export | ✅ working |
+| Keyboard shortcuts, ARIA live save/toast status, responsive breakpoints (full 3-pane ≥1280px, collapsed 768–1279px, read-only <768px) | ✅ working |
+| AI cleanup proxy | ⚠️ wired, needs a real provider API key — see `backend/.env.example` |
 
-## What's intentionally stubbed / needs a decision from you
-
-1. **Hosted AI vendor.** AI calls go through a **provider-agnostic layer**
-   (`backend/src/services/aiProxy.service.js` dispatcher → `backend/src/services/providers/`).
-   Two providers ship today:
-   - **Clipdrop** (default) — `AI_PROVIDER=clipdrop`, activate with `CLIPDROP_API_KEY` in `backend/.env`.
-   - **Hugging Face Inference Providers** — `AI_PROVIDER=huggingface` with `HF_API_KEY`, `HF_MODEL`,
-     `HF_API_URL` (see `.env.example`). The legacy `api-inference.huggingface.co` endpoint is
-     decommissioned; calls go to `https://router.huggingface.co/<provider>/<provider-model-id>`
-     and image models are **billed to the HF account** (HTTP 402 when credits are depleted).
-     Request format (json/binary/multipart) and field names are configurable because
-     provider payloads differ — e.g. fal-ai edit models want
-     `{"prompt": …, "image_urls": ["data:image/png;base64,…"]}` (`HF_JSON_SHAPE=image_urls`).
-   Adding another provider (Replicate, Fal.ai, custom FastAPI…) is just a new
-   `providers/<name>.js` + a case in the dispatcher — routes/controllers/frontend stay untouched.
-   Shared HTTP behavior (30s timeout, retry on 429/503/504, structured logging) lives in
-   `providers/httpClient.js`.
-2. **Automatic surface segmentation.** v1 uses a manual brush to select the
-   surface to paint (simple, reliable, ships today). Automatic wall/roof/trim
-   detection (so the user doesn't have to brush at all) is a real feature to
-   add next — likely another hosted-API call (e.g. a segmentation endpoint)
-   proxied the same way as cleanup.
-3. **Client/job tracking.** `projects` table exists but the UI doesn't yet
-   surface a "create project for this client" flow — wire it into the upload
-   step whenever you're ready.
+### Explicitly deferred (not stubbed, not silently faked)
+- **RBAC/roles** — per product decision for this phase.
+- **Reports** — depends on cross-rep aggregation that needs roles to be meaningful.
+- **AI Surface Selection (auto segmentation)** — no segmentation vendor wired yet; manual
+  selection tools cover surface masking today.
+- **PDF export with dealer branding** — needs a render pipeline beyond client `<canvas>`;
+  PNG and side-by-side JPG export work today, and the export endpoint returns a clear
+  501 (not a silent downgrade) if PDF is requested.
 
 ## Running it locally
 
@@ -81,7 +71,7 @@ docker compose up -d mysql
 cd backend
 cp .env.example .env      # fill in DB + AI API key
 npm install
-npm run migrate           # applies schema.sql
+npm run migrate           # applies schema.sql (safe to re-run — additive/idempotent)
 npm run dev                # http://localhost:4000
 
 # 3. Frontend
@@ -91,15 +81,13 @@ npm install
 npm run dev                # http://localhost:5173
 ```
 
-Or everything at once: `docker compose up --build` from the project root
-(after filling in real env values in `docker-compose.yml` / a `.env` it reads).
+Or everything at once: `docker compose up --build` from the project root.
 
-## Next steps I'd suggest
+## Next steps
 
-1. Plug in a real Clipdrop (or alternate) API key and test the cleanup step
-   end-to-end with an actual client photo.
-2. Try the Excel import against your real file to confirm the column mapping
-   (`backend/src/services/paints.validation.js`) matches exactly — the `id`
-   vs `s_id` ambiguity from your sample is called out there.
-3. Decide on automatic surface segmentation (item 2 above) once the manual
-   brush flow feels right in practice — it's a drop-in addition, not a rewrite.
+1. Plug in a real Clipdrop (or alternate) API key and test the cleanup step end-to-end.
+2. Decide on an AI surface-segmentation vendor if automatic wall/roof/trim detection is
+   wanted (drop-in: same proxy pattern as cleanup, returns a mask consumed by the
+   existing layer pipeline).
+3. If/when auth is needed, `createdBy`-style fields and per-project ownership can be
+   added without a data migration — nothing here assumes a single global user.
