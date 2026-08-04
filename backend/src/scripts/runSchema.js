@@ -30,6 +30,9 @@ async function main() {
     "ALTER TABLE assets ADD COLUMN label VARCHAR(150) NULL AFTER project_id",
     "ALTER TABLE layers ADD COLUMN deleted_at TIMESTAMP(3) NULL",
     "ALTER TABLE layers ADD COLUMN ai_surface_key VARCHAR(80) NULL AFTER finish_override",
+    "ALTER TABLE layers ADD COLUMN ai_analysis_id INT NULL AFTER ai_surface_key",
+    "ALTER TABLE layers ADD COLUMN ai_scheme_id INT NULL AFTER ai_analysis_id",
+    "ALTER TABLE layers ADD UNIQUE INDEX uq_layers_ai_surface (ai_analysis_id, ai_surface_key)",
   ];
   for (const stmt of upgradeColumns) {
     try {

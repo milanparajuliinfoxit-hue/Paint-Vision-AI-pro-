@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS layers (
     opacity             DECIMAL(4,3) NOT NULL DEFAULT 1.000,
     finish_override     VARCHAR(50) NULL,
     ai_surface_key      VARCHAR(80) NULL,          -- links a layer to a detected_surfaces.class_key from AI analysis
+    ai_analysis_id      INT NULL,                  -- ai_jobs.id that produced the surface; (ai_analysis_id, ai_surface_key) is the idempotency key for AI layer applies
+    ai_scheme_id        INT NULL,                  -- paint_recommendations.id that mapped the color, when the layer came from a scheme apply
     order_index         INT NOT NULL DEFAULT 0,
     locked              TINYINT(1) NOT NULL DEFAULT 0,
     visible             TINYINT(1) NOT NULL DEFAULT 1,
@@ -115,7 +117,12 @@ CREATE TABLE IF NOT EXISTS layers (
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at          TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     CONSTRAINT fk_layer_asset FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
-    CONSTRAINT fk_layer_paint FOREIGN KEY (current_color_id) REFERENCES paints(id) ON DELETE SET NULL
+    CONSTRAINT fk_layer_paint FOREIGN KEY (current_color_id) REFERENCES paints(id) ON DELETE SET NULL,
+    -- One AI layer per surface per analysis: re-applying a scheme/analysis
+    -- updates the existing row in place instead of inserting duplicates
+    -- (NULL ai_analysis_id rows — hand-drawn layers — are untouched by MySQL's
+    -- UNIQUE semantics, which treat NULLs as distinct).
+    UNIQUE KEY uq_layers_ai_surface (ai_analysis_id, ai_surface_key)
 ) ENGINE=InnoDB;
 
 -- Append-only undo/redo log, persisted per project so history survives a

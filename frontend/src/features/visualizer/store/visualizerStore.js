@@ -6,6 +6,9 @@ import { create } from 'zustand';
 export const useVisualizerStore = create((set, get) => ({
   activeTool: 'rect',
   brushMode: 'mask-edit', // 'mask-edit' | 'direct-paint'
+  // Explicit brush mask-refine polarity: 'add' grows a layer's mask, 'remove'
+  // shrinks it (the eraser tool always removes). Alt inverts on the fly.
+  maskRefineMode: 'add',
   brushSize: 60,
   magicWandTolerance: 24,
 
@@ -60,6 +63,7 @@ export const useVisualizerStore = create((set, get) => ({
 
   setActiveTool: (tool) => set({ activeTool: tool }),
   setBrushMode: (mode) => set({ brushMode: mode }),
+  setMaskRefineMode: (mode) => set({ maskRefineMode: mode }),
   setBrushSize: (size) => set({ brushSize: size }),
   setMagicWandTolerance: (tolerance) => set({ magicWandTolerance: tolerance }),
   setSurfaceAware: (on) => set({ surfaceAware: on }),

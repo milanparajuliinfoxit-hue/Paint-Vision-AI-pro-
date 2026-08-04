@@ -14,6 +14,8 @@ export default function Inspector({ projectId, assetId, onOpenExport }) {
   const activeTool = useVisualizerStore((s) => s.activeTool);
   const brushMode = useVisualizerStore((s) => s.brushMode);
   const setBrushMode = useVisualizerStore((s) => s.setBrushMode);
+  const maskRefineMode = useVisualizerStore((s) => s.maskRefineMode);
+  const setMaskRefineMode = useVisualizerStore((s) => s.setMaskRefineMode);
   const brushSize = useVisualizerStore((s) => s.brushSize);
   const setBrushSize = useVisualizerStore((s) => s.setBrushSize);
   const magicWandTolerance = useVisualizerStore((s) => s.magicWandTolerance);
@@ -60,6 +62,22 @@ export default function Inspector({ projectId, assetId, onOpenExport }) {
             </div>
             {brushMode === 'mask-edit' && !activeLayerId && (
               <p className="text-xs text-[var(--warning)] mb-2">Select a layer first — hold Alt to subtract.</p>
+            )}
+            {brushMode === 'mask-edit' && activeLayerId && (
+              <div className="flex gap-1 mb-3">
+                <button
+                  onClick={() => setMaskRefineMode('add')}
+                  className={`flex-1 text-xs py-1.5 rounded-[var(--radius-sm)] border ${maskRefineMode === 'add' ? 'bg-[var(--signal)] text-white border-transparent' : 'border-[var(--line)]'}`}
+                >
+                  Add to mask
+                </button>
+                <button
+                  onClick={() => setMaskRefineMode('remove')}
+                  className={`flex-1 text-xs py-1.5 rounded-[var(--radius-sm)] border ${maskRefineMode === 'remove' ? 'bg-[var(--signal)] text-white border-transparent' : 'border-[var(--line)]'}`}
+                >
+                  Remove from mask
+                </button>
+              </div>
             )}
             <label className="text-xs text-[var(--graphite)]">Brush size — {brushSize}px</label>
             <Slider min={10} max={200} value={[brushSize]} onValueChange={([v]) => setBrushSize(v)} />

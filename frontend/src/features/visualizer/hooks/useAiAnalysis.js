@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ai, assets as assetsApi, meta } from '../../../shared/lib/api';
+import { loadAlphaGrid } from '../../../shared/lib/maskImage';
 
 // Feature-flag/provider state from GET /api/meta — the UI renders capability
 // toggles (enabled/disabled) based on the server's actual configuration.
@@ -56,22 +57,32 @@ export function useSurfaceConstraintAlpha({ analysis, surfaceKey, width, height 
   return alpha;
 }
 
-function loadAlphaGrid(url, width, height) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, width, height);
-      const data = ctx.getImageData(0, 0, width, height).data;
-      const grid = new Uint8Array(width * height);
-      for (let i = 0; i < grid.length; i++) grid[i] = data[i * 4 + 3];
-      resolve(grid);
-    };
-    img.onerror = reject;
-    img.src = url;
-  });
+// Alpha grids for every paintable detected surface at canvas resolution, in
+// paint-stacking order (later entries render on top). Used by the surface-pick
+// tool to resolve a canvas click to the surface under the cursor. Returns an
+// array of { surface, alpha, width, height }; empty while loading.
+export function useSurfaceAlphaGrids({ analysis, width, height }) {
+  const [surfaceMasks, setSurfaceMasks] = useState([]);
+
+  useEffect(() => {
+    setSurfaceMasks([]);
+    if (!width || !height) return undefined;
+
+    const surfaces = (analysis?.surfaces || []).filter((s) => s.paintable && s.mask_path);
+    if (surfaces.length === 0) return undefined;
+
+    let cancelled = false;
+    Promise.all(
+      surfaces.map(async (surface) => {
+        const alpha = await loadAlphaGrid(assetsApi.fileUrl(surface.mask_path), width, height);
+        return { surface, alpha, width, height };
+      })
+    ).then((entries) => { if (!cancelled) setSurfaceMasks(entries); })
+      .catch(() => { if (!cancelled) setSurfaceMasks([]); });
+
+    return () => { cancelled = true; };
+  }, [analysis, width, height]);
+
+  return surfaceMasks;
 }
+

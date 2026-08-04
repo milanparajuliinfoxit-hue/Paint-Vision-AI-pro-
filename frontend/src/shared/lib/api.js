@@ -83,8 +83,8 @@ export const assets = {
 
 // --- Layers (masked, re-colorable surface regions on an asset) ---
 export const layers = {
-  create: (assetId, { name, createdVia, currentColorId, opacity, orderIndex, aiSurfaceKey }, maskBlob) => {
-    const form = toForm({ name, createdVia, currentColorId, opacity, orderIndex, aiSurfaceKey }, { mask: maskBlob });
+  create: (assetId, { name, createdVia, currentColorId, opacity, orderIndex, aiSurfaceKey, aiAnalysisId, aiSchemeId }, maskBlob) => {
+    const form = toForm({ name, createdVia, currentColorId, opacity, orderIndex, aiSurfaceKey, aiAnalysisId, aiSchemeId }, { mask: maskBlob });
     return request(`/api/assets/${assetId}/layers`, { method: 'POST', body: form });
   },
   list: (assetId) => request(`/api/assets/${assetId}/layers`),

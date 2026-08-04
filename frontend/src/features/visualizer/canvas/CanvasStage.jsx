@@ -18,6 +18,8 @@ export default function CanvasStage({
   onCommitMask,
   onEyedropper,
   constraintAlpha,
+  surfaceMasks,
+  onSurfacePick,
 }) {
   const containerRef = useRef(null);
   const stageRef = useRef(null);
@@ -36,7 +38,7 @@ export default function CanvasStage({
   const imageVisible = useVisualizerStore((s) => s.imageVisible);
   const fitSignal = useVisualizerStore((s) => s.fitSignal);
 
-  const tool = useToolInteraction({ width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha });
+  const tool = useToolInteraction({ width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha, surfaceMasks, onSurfacePick });
 
   useEffect(() => {
     if (!containerRef.current) return undefined;

@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useVisualizerStore } from '../store/visualizerStore';
-import { rasterizeRect, rasterizePolygon, rasterizeBrushStroke, surfaceAwareBrushStroke, floodFillMask, clipMaskToConstraint } from './maskOps';
+import { rasterizeRect, rasterizePolygon, rasterizeBrushStroke, surfaceAwareBrushStroke, floodFillMask, clipMaskToConstraint, pickSurfaceAtPoint } from './maskOps';
 import { rgbToLab } from '../../../shared/lib/colorEngine';
 
 // Owns the transient, in-progress interaction for whichever tool is active
@@ -12,13 +12,20 @@ import { rgbToLab } from '../../../shared/lib/colorEngine';
 // `constraintAlpha` (optional Uint8Array, full image size) clips brush
 // strokes to an AI-detected surface mask — the surface lock — so paint on an
 // ai-surface layer physically cannot escape the detected surface.
-export function useToolInteraction({ width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha }) {
+//
+// `surfaceMasks` (from useSurfaceAlphaGrids) backs the surface-pick tool: a
+// click resolves to the paintable surface under the cursor and is handed to
+// onSurfacePick, which paints the whole surface as an idempotent AI layer.
+export function useToolInteraction({
+  width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha, surfaceMasks, onSurfacePick,
+}) {
   const activeTool = useVisualizerStore((s) => s.activeTool);
   const brushMode = useVisualizerStore((s) => s.brushMode);
   const brushSize = useVisualizerStore((s) => s.brushSize);
   const magicWandTolerance = useVisualizerStore((s) => s.magicWandTolerance);
   const surfaceAware = useVisualizerStore((s) => s.surfaceAware);
   const surfaceTolerance = useVisualizerStore((s) => s.surfaceTolerance);
+  const maskRefineMode = useVisualizerStore((s) => s.maskRefineMode);
 
   const [dragStart, setDragStart] = useState(null);
   const [dragCurrent, setDragCurrent] = useState(null);
@@ -102,10 +109,15 @@ export function useToolInteraction({ width, height, baseImageData, onCommitMask,
         setIsDrawing(true);
         brushPointsRef.current = [pt];
         setBrushPoints([pt]);
-        setSubtractStroke(!!evt?.altKey);
+        setSubtractStroke(maskRefineMode === 'remove' ? !evt?.altKey : !!evt?.altKey);
         lastPreviewAt.current = 0;
         armWindowUp();
         break;
+      case 'surface-pick': {
+        const surface = pickSurfaceAtPoint(surfaceMasks, pt.x, pt.y);
+        if (surface) onSurfacePick?.(surface);
+        break;
+      }
       case 'magic-wand': {
         if (!baseImageData) return;
         const x = Math.min(width - 1, Math.max(0, Math.round(pt.x)));

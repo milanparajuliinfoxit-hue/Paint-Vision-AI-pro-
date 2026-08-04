@@ -4,7 +4,9 @@ import {
   useAssetsList, useUploadAsset, useCleanAsset, useRenameAsset, useDeleteAsset, useDuplicateAsset,
 } from '../hooks/useAssets';
 import { useLayersList } from '../hooks/useLayers';
-import { assets as assetsApi, concepts as conceptsApi, exportsApi } from '../../../shared/lib/api';
+import { useAssetAnalysis } from '../hooks/useAiAnalysis';
+import { useApplyConcept, useConcepts } from '../hooks/useConcepts';
+import { assets as assetsApi, exportsApi } from '../../../shared/lib/api';
 import { Button } from '../../../shared/ui/button';
 import { useToast } from '../../../shared/ui/toast';
 import { useVisualizerStore } from '../store/visualizerStore';
@@ -37,7 +39,7 @@ function Section({ title, count, defaultOpen = true, children }) {
   );
 }
 
-export default function AssetsTab({ projectId, activeAssetId, onSelectAsset }) {
+export default function AssetsTab({ projectId, activeAssetId, onSelectAsset, width, height }) {
   const fileInputRef = useRef(null);
   const setCompareState = useVisualizerStore((s) => s.setCompareState);
   const { data: assetList = [] } = useAssetsList(projectId);
@@ -47,11 +49,9 @@ export default function AssetsTab({ projectId, activeAssetId, onSelectAsset }) {
   const deleteAsset = useDeleteAsset(projectId);
   const duplicateAsset = useDuplicateAsset(projectId);
   const { data: layerList = [] } = useLayersList(activeAssetId);
-  const { data: conceptList = [] } = useQuery({
-    queryKey: ['concepts', projectId],
-    queryFn: () => conceptsApi.list(projectId),
-    enabled: !!projectId,
-  });
+  const { data: conceptList = [] } = useConcepts(projectId);
+  const { data: analysis } = useAssetAnalysis(activeAssetId);
+  const { applyConcept } = useApplyConcept(projectId, activeAssetId, { width, height });
   const { data: exportList = [] } = useQuery({
     queryKey: ['exports', projectId],
     queryFn: () => exportsApi.list(projectId),
@@ -61,6 +61,21 @@ export default function AssetsTab({ projectId, activeAssetId, onSelectAsset }) {
 
   const [renamingAsset, setRenamingAsset] = useState(null); // asset object or null
   const [deletingAsset, setDeletingAsset] = useState(null);
+
+  const surfacesByClass = new Map((analysis?.surfaces || []).map((s) => [s.class_key, s]));
+
+  async function handleApplyConcept(concept) {
+    try {
+      if (!analysis?.analyzed) {
+        showToast('Run AI analysis on this photo first — concepts need the detected surfaces.', { variant: 'danger' });
+        return;
+      }
+      const layer = await applyConcept(concept, surfacesByClass);
+      showToast(layer ? `Applied "${concept.name}" as editable layers.` : 'Nothing to apply — no paintable surfaces match this photo.');
+    } catch (err) {
+      showToast(err.message || 'Could not apply concept.', { variant: 'danger' });
+    }
+  }
 
   const cleanedAssets = assetList.filter((a) => a.cleaned_path);
   const masksForActiveAsset = layerList.filter((l) => l.mask_path);
@@ -186,15 +201,21 @@ export default function AssetsTab({ projectId, activeAssetId, onSelectAsset }) {
 
       <Section title="Painted (saved looks)" count={conceptList.length} defaultOpen={false}>
         {conceptList.length === 0 ? (
-          <p className="text-xs text-[var(--graphite)] px-1">Save a Concept from the canvas toolbar to see painted looks here.</p>
+          <p className="text-xs text-[var(--graphite)] px-1">
+            Save a scheme from the AI Schemes tab to see painted looks here — each one re-applies as
+            real, editable layers on any analyzed photo.
+          </p>
         ) : (
           <ul className="flex flex-col gap-1 px-1">
             {conceptList.map((c) => (
               <li key={c.id} className="flex items-center gap-2 text-xs">
                 {c.thumbnail_path && (
-                  <img src={assetsApi.fileUrl(c.thumbnail_path)} alt="" className="w-6 h-6 rounded-[var(--radius-sm)] border border-[var(--line)] object-cover" />
+                  <img src={assetsApi.fileUrl(c.thumbnail_path)} alt="" className="w-8 h-8 rounded-[var(--radius-sm)] border border-[var(--line)] object-cover shrink-0" />
                 )}
-                <span className="truncate">{c.name}</span>
+                <span className="truncate flex-1">{c.name}</span>
+                <button className="text-[var(--signal)] hover:underline shrink-0" onClick={() => handleApplyConcept(c)}>
+                  Apply
+                </button>
               </li>
             ))}
           </ul>

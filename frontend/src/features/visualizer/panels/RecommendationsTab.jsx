@@ -1,9 +1,11 @@
-import { useMemo } from 'react';
-import { Wand2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Wand2, BookmarkPlus, Check } from 'lucide-react';
 import { useAssetAnalysis } from '../hooks/useAiAnalysis';
 import { useGenerateRecommendations, useRecommendations } from '../hooks/useRecommendations';
 import { useApplySurface } from '../hooks/useApplySurface';
+import { useSaveConcept } from '../hooks/useConcepts';
 import { useAiMeta } from '../hooks/useAiAnalysis';
+import { renderSchemePreview, canvasToThumbnailBlob } from '../lib/renderSchemePreview';
 import { useToast } from '../../../shared/ui/toast';
 import { Button } from '../../../shared/ui/button';
 
@@ -20,7 +22,13 @@ const ROLE_LABELS = {
 // paint that exists in the catalog (resolved to a full paint object
 // server-side) — the AI never invents a color. Applying a scheme creates one
 // real layer per paintable surface through the standard layers API.
-export default function RecommendationsTab({ projectId, assetId, width, height }) {
+//
+// Each scheme card shows a RENDERED preview — the same applyPaintColor pass
+// the layer nodes use, composed over the full-size base image — so a dealer
+// sees the finished look before committing. "Save as concept" persists the
+// rendered thumbnail + surfaceClass->paintId map so the look can be re-applied
+// as editable layers later.
+export default function RecommendationsTab({ projectId, assetId, width, height, baseImageData }) {
   const showToast = useToast();
   const { data: aiMeta } = useAiMeta();
   const recommendationEnabled = aiMeta?.ai?.recommendation?.enabled;
@@ -29,6 +37,7 @@ export default function RecommendationsTab({ projectId, assetId, width, height }
   const { data: schemes = [] } = useRecommendations(assetId);
   const generate = useGenerateRecommendations(assetId);
   const { applyScheme } = useApplySurface(projectId, assetId, { width, height });
+  const saveConcept = useSaveConcept(projectId);
 
   // class_key -> detected surface, so applying a scheme never references a
   // surface the analysis didn't actually find.
@@ -39,6 +48,35 @@ export default function RecommendationsTab({ projectId, assetId, width, height }
   }, [analysis]);
 
   const analyzed = analysis?.analyzed;
+
+  // Preview canvases, keyed by scheme id so a re-render reuses the last
+  // computed thumbnail instead of re-running the LAB pass.
+  const [previews, setPreviews] = useState({});
+  const [savedNames, setSavedNames] = useState({});
+  const previewGenRef = useRef(0);
+
+  useEffect(() => {
+    if (!analyzed || !baseImageData || !width || !height) {
+      setPreviews({});
+      return undefined;
+    }
+    const gen = ++previewGenRef.current;
+    let cancelled = false;
+
+    Promise.all(
+      schemes.map(async (scheme) => {
+        const canvas = await renderSchemePreview({ baseImageData, scheme, surfacesByClass, width, height });
+        return { id: scheme.id, canvas };
+      })
+    ).then((results) => {
+      if (cancelled) return;
+      const next = {};
+      for (const { id, canvas } of results) next[id] = canvas;
+      setPreviews(next);
+    }).catch(() => { if (!cancelled) setPreviews({}); });
+
+    return () => { cancelled = true; };
+  }, [analyzed, baseImageData, width, height, schemes, surfacesByClass]);
 
   async function runGenerate() {
     try {
@@ -55,6 +93,28 @@ export default function RecommendationsTab({ projectId, assetId, width, height }
       showToast(layer ? `Applied "${scheme.name}" — paint the layers from the catalog.` : 'Nothing to apply — no paintable surfaces detected.');
     } catch (err) {
       showToast(err.message || 'Could not apply scheme.', { variant: 'danger' });
+    }
+  }
+
+  // Persists the rendered look: the preview canvas downscaled to a thumbnail
+  // plus surfaceClass -> paintId, so it re-applies as real layers later.
+  async function saveAsConcept(scheme) {
+    const preview = previews[scheme.id];
+    if (!preview) {
+      showToast('Preview is still rendering — try again in a moment.', { variant: 'danger' });
+      return;
+    }
+    try {
+      const layerColorMap = {};
+      for (const s of scheme.surfaces || []) {
+        if (s.paintId) layerColorMap[s.surfaceClass] = s.paintId;
+      }
+      const thumbnailBlob = await canvasToThumbnailBlob(preview);
+      await saveConcept.mutateAsync({ name: scheme.name, layerColorMap, thumbnailBlob });
+      setSavedNames((prev) => ({ ...prev, [scheme.id]: true }));
+      showToast(`Saved "${scheme.name}" as a concept.`);
+    } catch (err) {
+      showToast(err.message || 'Could not save concept.', { variant: 'danger' });
     }
   }
 
@@ -93,7 +153,26 @@ export default function RecommendationsTab({ projectId, assetId, width, height }
                 <div className="truncate text-xs font-semibold text-[var(--ink)]">{scheme.name}</div>
                 {scheme.tagline && <div className="mt-0.5 text-[11px] leading-snug text-[var(--graphite)]">{scheme.tagline}</div>}
               </div>
-              <Button size="sm" variant="secondary" onClick={() => apply(scheme)}>Apply</Button>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button size="sm" variant="secondary" onClick={() => apply(scheme)}>Apply</Button>
+                <Button size="sm" variant="ghost" onClick={() => saveAsConcept(scheme)} disabled={saveConcept.isPending || !previews[scheme.id]}>
+                  {savedNames[scheme.id] ? <Check size={14} /> : <BookmarkPlus size={14} />}
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-2 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--paper-raised)] overflow-hidden">
+              {previews[scheme.id] ? (
+                <img
+                  src={previews[scheme.id].toDataURL('image/png')}
+                  alt={`${scheme.name} preview`}
+                  className="w-full h-28 object-cover"
+                />
+              ) : (
+                <div className="h-28 flex items-center justify-center text-[11px] text-[var(--graphite)]">
+                  Rendering preview…
+                </div>
+              )}
             </div>
 
             <div className="mt-2 flex items-center gap-1">
