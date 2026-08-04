@@ -3,6 +3,7 @@ const storage = require('../services/storage.service');
 const assetsModel = require('../services/assets.model');
 const projectsModel = require('../services/projects.model');
 const layersModel = require('../services/layers.model');
+const aiJobsModel = require('../services/aiJobs.model');
 const aiProxy = require('../services/aiProxy.service');
 
 async function uploadAsset(req, res, next) {
@@ -96,6 +97,7 @@ async function deleteAsset(req, res, next) {
     // disappears — including soft-deleted layers, since their mask files
     // are still real files on disk that need cleaning up too.
     const layers = await layersModel.listAllLayersForAsset(asset.id);
+    const aiMaskPaths = await aiJobsModel.listMaskPathsForAsset(asset.id);
     const project = asset.project_id ? await projectsModel.getProject(asset.project_id) : null;
 
     await assetsModel.deleteAsset(asset.id);
@@ -112,6 +114,8 @@ async function deleteAsset(req, res, next) {
     for (const layer of layers) {
       if (layer.mask_path) storage.deleteFile(layer.mask_path);
     }
+    for (const maskPath of aiMaskPaths) storage.deleteFile(maskPath);
+    storage.deleteDirIfEmpty(path.join(asset.id, 'ai'));
     storage.deleteDirIfEmpty(asset.id);
 
     res.status(204).end();

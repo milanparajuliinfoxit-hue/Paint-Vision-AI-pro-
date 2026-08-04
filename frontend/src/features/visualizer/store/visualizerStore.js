@@ -16,6 +16,12 @@ export const useVisualizerStore = create((set, get) => ({
   surfaceAware: true,
   surfaceTolerance: 22,
 
+  // AI surface lock: when on (and the active layer came from AI analysis —
+  // it carries an ai_surface_key), brush strokes are additionally clipped to
+  // the detected surface mask, so paint physically cannot escape the surface
+  // the AI identified. Defaults on; off for freehand refinement.
+  aiSurfaceLock: true,
+
   viewport: { scale: 1, x: 0, y: 0 },
 
   activeAssetId: null,
@@ -58,6 +64,7 @@ export const useVisualizerStore = create((set, get) => ({
   setMagicWandTolerance: (tolerance) => set({ magicWandTolerance: tolerance }),
   setSurfaceAware: (on) => set({ surfaceAware: on }),
   setSurfaceTolerance: (tolerance) => set({ surfaceTolerance: tolerance }),
+  setAiSurfaceLock: (on) => set({ aiSurfaceLock: on }),
   setViewport: (viewport) => set({ viewport }),
   setActiveAssetId: (id) => set({ activeAssetId: id, activeLayerId: null }),
   setActiveLayerId: (id) => set({ activeLayerId: id }),

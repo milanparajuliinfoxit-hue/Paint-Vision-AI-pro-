@@ -14,6 +14,7 @@ const projectsRoutes = require('./routes/projects.routes');
 const assetsRoutes = require('./routes/assets.routes');
 const layersRoutes = require('./routes/layers.routes');
 const exportsRoutes = require('./routes/exports.routes');
+const metaRoutes = require('./routes/meta.routes');
 
 const storage = require('./services/storage.service');
 
@@ -44,6 +45,7 @@ app.use('/api/projects', projectsRoutes);
 app.use('/api/assets', assetsRoutes);
 app.use('/api/layers', layersRoutes);
 app.use('/api/exports', exportsRoutes);
+app.use('/api/meta', metaRoutes);
 
 // Serve stored images through a controlled route rather than exposing the
 // upload folder directly — keeps the door open for access control later.

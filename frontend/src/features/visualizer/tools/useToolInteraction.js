@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useVisualizerStore } from '../store/visualizerStore';
-import { rasterizeRect, rasterizePolygon, rasterizeBrushStroke, surfaceAwareBrushStroke, floodFillMask } from './maskOps';
+import { rasterizeRect, rasterizePolygon, rasterizeBrushStroke, surfaceAwareBrushStroke, floodFillMask, clipMaskToConstraint } from './maskOps';
 import { rgbToLab } from '../../../shared/lib/colorEngine';
 
 // Owns the transient, in-progress interaction for whichever tool is active
@@ -8,7 +8,11 @@ import { rgbToLab } from '../../../shared/lib/colorEngine';
 // resolve to a finished mask handed to onCommitMask (requirements doc,
 // Section 5.2); color application itself happens on catalog click
 // (useApplyColor), not through a canvas tool.
-export function useToolInteraction({ width, height, baseImageData, onCommitMask, onEyedropper }) {
+//
+// `constraintAlpha` (optional Uint8Array, full image size) clips brush
+// strokes to an AI-detected surface mask — the surface lock — so paint on an
+// ai-surface layer physically cannot escape the detected surface.
+export function useToolInteraction({ width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha }) {
   const activeTool = useVisualizerStore((s) => s.activeTool);
   const brushMode = useVisualizerStore((s) => s.brushMode);
   const brushSize = useVisualizerStore((s) => s.brushSize);
@@ -72,7 +76,8 @@ export function useToolInteraction({ width, height, baseImageData, onCommitMask,
     const now = performance.now();
     if (now - lastPreviewAt.current < 150) return;
     lastPreviewAt.current = now;
-    const mask = surfaceAwareBrushStroke(baseImageData, width, height, nextPoints, brushSize, surfaceTolerance, rgbToLab);
+    let mask = surfaceAwareBrushStroke(baseImageData, width, height, nextPoints, brushSize, surfaceTolerance, rgbToLab);
+    if (constraintAlpha) mask = clipMaskToConstraint(mask, constraintAlpha);
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -144,9 +149,10 @@ export function useToolInteraction({ width, height, baseImageData, onCommitMask,
     } else if (activeTool === 'brush' && brushPointsRef.current.length > 0) {
       // The surface-aware brush clips the footprint to the wall under the
       // stroke; toggling it off restores the raw footprint for fine work.
-      const strokeMask = surfaceAware && baseImageData
+      let strokeMask = surfaceAware && baseImageData
         ? surfaceAwareBrushStroke(baseImageData, width, height, brushPointsRef.current, brushSize, surfaceTolerance, rgbToLab)
         : rasterizeBrushStroke(width, height, brushPointsRef.current, brushSize);
+      if (constraintAlpha) strokeMask = clipMaskToConstraint(strokeMask, constraintAlpha);
       onCommitMask(strokeMask, 'brush', { brushMode, subtract: subtractStroke });
       reset();
     } else {

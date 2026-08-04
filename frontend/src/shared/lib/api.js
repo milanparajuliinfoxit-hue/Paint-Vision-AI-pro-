@@ -83,8 +83,8 @@ export const assets = {
 
 // --- Layers (masked, re-colorable surface regions on an asset) ---
 export const layers = {
-  create: (assetId, { name, createdVia, currentColorId, opacity, orderIndex }, maskBlob) => {
-    const form = toForm({ name, createdVia, currentColorId, opacity, orderIndex }, { mask: maskBlob });
+  create: (assetId, { name, createdVia, currentColorId, opacity, orderIndex, aiSurfaceKey }, maskBlob) => {
+    const form = toForm({ name, createdVia, currentColorId, opacity, orderIndex, aiSurfaceKey }, { mask: maskBlob });
     return request(`/api/assets/${assetId}/layers`, { method: 'POST', body: form });
   },
   list: (assetId) => request(`/api/assets/${assetId}/layers`),
@@ -99,6 +99,20 @@ export const layers = {
   },
   remove: (layerId) => request(`/api/layers/${layerId}`, { method: 'DELETE' }),
   restore: (layerId) => request(`/api/layers/${layerId}/restore`, { method: 'POST' }),
+};
+
+// --- Meta (feature-flag-aware platform info) ---
+export const meta = {
+  get: () => request('/api/meta'),
+};
+
+// --- AI (house-understanding + catalog-only paint recommendations) ---
+export const ai = {
+  analyze: (assetId) => request(`/api/assets/${assetId}/ai/analyze`, { method: 'POST' }),
+  getAnalysis: (assetId) => request(`/api/assets/${assetId}/ai/analysis`),
+  generateRecommendations: (assetId, count) =>
+    request(`/api/assets/${assetId}/ai/recommendations`, { method: 'POST', body: JSON.stringify({ count }) }),
+  listRecommendations: (assetId) => request(`/api/assets/${assetId}/ai/recommendations`),
 };
 
 // --- History (append-only undo/redo log, persisted per project) ---

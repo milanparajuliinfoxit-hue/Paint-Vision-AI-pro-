@@ -10,7 +10,7 @@ async function createLayer(req, res, next) {
     const asset = await assetsModel.getAsset(req.params.assetId);
     if (!asset) return res.status(404).json({ error: 'Asset not found' });
 
-    const { name, createdVia, currentColorId, opacity, orderIndex } = req.body;
+    const { name, createdVia, currentColorId, opacity, orderIndex, aiSurfaceKey } = req.body;
     if (!name || !createdVia) {
       return res.status(400).json({ error: 'name and createdVia are required' });
     }
@@ -35,6 +35,7 @@ async function createLayer(req, res, next) {
       currentColorId: currentColorId || null,
       opacity: opacity !== undefined ? Number(opacity) : undefined,
       orderIndex: orderIndex !== undefined ? Number(orderIndex) : undefined,
+      aiSurfaceKey: aiSurfaceKey || null,
     });
     res.status(201).json(layer);
   } catch (err) { next(err); }
