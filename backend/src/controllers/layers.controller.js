@@ -24,7 +24,7 @@ async function createLayer(req, res, next) {
     let maskPath = null;
     if (req.file) {
       const relativeDir = path.join('uploads', asset.id, 'masks');
-      maskPath = storage.saveBuffer(relativeDir, `layer_${Date.now()}.png`, req.file.buffer);
+      maskPath = await storage.saveBuffer(relativeDir, `layer_${Date.now()}.png`, req.file.buffer);
     }
 
     // AI-surface applies are idempotent: keyed on (ai_analysis_id,
@@ -86,7 +86,7 @@ async function updateLayer(req, res, next) {
     // only need coercion on the multipart path.
     if (req.file) {
       const relativeDir = path.join('uploads', existing.asset_id, 'masks');
-      patch.maskPath = storage.saveBuffer(relativeDir, `layer_${Date.now()}.png`, req.file.buffer);
+      patch.maskPath = await storage.saveBuffer(relativeDir, `layer_${Date.now()}.png`, req.file.buffer);
       for (const field of NUMERIC_PATCH_FIELDS) {
         if (patch[field] !== undefined) patch[field] = Number(patch[field]);
       }

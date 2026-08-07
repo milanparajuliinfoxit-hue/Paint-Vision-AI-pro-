@@ -30,6 +30,11 @@ export default function AIAnalyzeTab({ projectId, assetId, width, height }) {
 
   const analyzed = analysis?.analyzed;
   const running = analyze.isPending || analysisRefetching;
+  // The job that actually produced the current results may have run under a
+  // different provider than what's configured right now — prefer it once it
+  // exists so the badge always reflects what generated what's on screen.
+  const activeProvider = analysis?.job?.provider || provider;
+  const isMockProvider = activeProvider === 'mock';
 
   async function runAnalysis() {
     try {
@@ -59,7 +64,15 @@ export default function AIAnalyzeTab({ projectId, assetId, width, height }) {
 
       <div className="flex items-center gap-2 text-xs text-[var(--graphite)]">
         <ScanSearch size={14} className="shrink-0" />
-        <span>Provider: <span className="font-medium text-[var(--ink)]">{provider}</span></span>
+        <span>Provider: <span className="font-medium text-[var(--ink)]">{activeProvider}</span></span>
+        {isMockProvider && (
+          <span
+            title="This deployment has no real vision model configured — surfaces are estimated with simple heuristics, not a trained model."
+            className="rounded-full bg-[var(--warning)]/15 px-2 py-0.5 text-[10px] font-medium text-[var(--warning)]"
+          >
+            Rule-based preview
+          </span>
+        )}
       </div>
 
       <Button onClick={runAnalysis} disabled={!assetId || running || analysisEnabled === false}>
@@ -82,7 +95,7 @@ export default function AIAnalyzeTab({ projectId, assetId, width, height }) {
         </p>
       )}
 
-      {running && !analyzed && <p className="text-xs text-[var(--graphite)]">This runs locally in the mock provider (no API key).</p>}
+      {running && !analyzed && isMockProvider && <p className="text-xs text-[var(--graphite)]">This runs locally in the mock provider (no API key).</p>}
 
       {analyzed && analysis.job && (
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[var(--graphite)] border-b border-[var(--line)] pb-2">

@@ -15,9 +15,10 @@ const aiConfig = require('../../config/aiConfig');
 const aiResult = require('./aiResult');
 const mockProvider = require('./providers/mockProvider');
 const httpVisionProvider = require('./providers/httpVisionProvider');
+const hfVisionProvider = require('./providers/hfVisionProvider');
 const catalogRecommendationProvider = require('./providers/catalogRecommendationProvider');
 
-const PROVIDERS = [mockProvider, httpVisionProvider, catalogRecommendationProvider];
+const PROVIDERS = [mockProvider, httpVisionProvider, hfVisionProvider, catalogRecommendationProvider];
 
 function getProviderFor(capability) {
   const configured = aiConfig.getProviderFor(capability);

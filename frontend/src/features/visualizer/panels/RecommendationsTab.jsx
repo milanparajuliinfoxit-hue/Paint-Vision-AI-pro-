@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Wand2, BookmarkPlus, Check } from 'lucide-react';
 import { useAssetAnalysis } from '../hooks/useAiAnalysis';
 import { useGenerateRecommendations, useRecommendations } from '../hooks/useRecommendations';
 import { useApplySurface } from '../hooks/useApplySurface';
 import { useSaveConcept } from '../hooks/useConcepts';
 import { useAiMeta } from '../hooks/useAiAnalysis';
-import { renderSchemePreview, canvasToThumbnailBlob } from '../lib/renderSchemePreview';
+import { renderSchemePreview, downscaleImageData, canvasToThumbnailBlob } from '../lib/renderSchemePreview';
+import { MAX_PREVIEW_DIM, buildPreviewCacheKey, createBoundedCache } from '../lib/schemePreviewCore';
 import { useToast } from '../../../shared/ui/toast';
 import { Button } from '../../../shared/ui/button';
 
@@ -18,16 +19,26 @@ const ROLE_LABELS = {
   doors: 'Doors',
 };
 
+// Cached rendered previews, keyed by asset:scheme:analysis:size so reopening
+// the tab (or switching assets) never re-runs the paint pass for a preview it
+// already rendered. Bounded — see schemePreviewCore.createBoundedCache.
+const PREVIEW_CACHE = createBoundedCache({ maxEntries: 64 });
+
+// Error-isolation marker: a scheme whose preview failed shows a placeholder
+// instead of taking down the whole panel.
+const FAILED_PREVIEW = { failed: true };
+
 // Catalog-only paint schemes. Every scheme maps each detected surface to a
 // paint that exists in the catalog (resolved to a full paint object
 // server-side) — the AI never invents a color. Applying a scheme creates one
 // real layer per paintable surface through the standard layers API.
 //
 // Each scheme card shows a RENDERED preview — the same applyPaintColor pass
-// the layer nodes use, composed over the full-size base image — so a dealer
-// sees the finished look before committing. "Save as concept" persists the
-// rendered thumbnail + surfaceClass->paintId map so the look can be re-applied
-// as editable layers later.
+// the layer nodes use, composed over the base image — but ONLY at preview
+// resolution (max 256px) and ONLY one scheme at a time, so opening this panel
+// is cheap and never allocates workspace-sized buffers (the P0 crash fix).
+// "Save as concept" persists the rendered thumbnail + surfaceClass->paintId
+// map so the look can be re-applied as editable layers later.
 export default function RecommendationsTab({ projectId, assetId, width, height, baseImageData }) {
   const showToast = useToast();
   const { data: aiMeta } = useAiMeta();
@@ -47,36 +58,81 @@ export default function RecommendationsTab({ projectId, assetId, width, height, 
     return map;
   }, [analysis]);
 
+  // Identity of the analysis that produced the current surfaces — part of the
+  // preview cache key, so a re-analysis invalidates old previews automatically.
+  const analysisId = analysis?.job?.id ?? analysis?.surfaces?.[0]?.analysis_id ?? null;
+
   const analyzed = analysis?.analyzed;
 
-  // Preview canvases, keyed by scheme id so a re-render reuses the last
-  // computed thumbnail instead of re-running the LAB pass.
+  // Preview URLs/canvases keyed by scheme id. Previews are generated once,
+  // cached, and stored as stable data URLs — React render only reads the URL
+  // and never calls canvas.toDataURL.
   const [previews, setPreviews] = useState({});
   const [savedNames, setSavedNames] = useState({});
-  const previewGenRef = useRef(0);
 
   useEffect(() => {
     if (!analyzed || !baseImageData || !width || !height) {
       setPreviews({});
       return undefined;
     }
-    const gen = ++previewGenRef.current;
+
+    const controller = new AbortController();
     let cancelled = false;
 
-    Promise.all(
-      schemes.map(async (scheme) => {
-        const canvas = await renderSchemePreview({ baseImageData, scheme, surfacesByClass, width, height });
-        return { id: scheme.id, canvas };
-      })
-    ).then((results) => {
-      if (cancelled) return;
-      const next = {};
-      for (const { id, canvas } of results) next[id] = canvas;
-      setPreviews(next);
-    }).catch(() => { if (!cancelled) setPreviews({}); });
+    // Seed this mount from the preview cache; only schemes not already
+    // rendered for this (asset, analysis, size) get queued for generation.
+    const seed = {};
+    const toRender = [];
+    for (const scheme of schemes) {
+      const key = buildPreviewCacheKey({ assetId, schemeId: scheme.id, analysisId, size: MAX_PREVIEW_DIM });
+      const cached = PREVIEW_CACHE.get(key);
+      if (cached) {
+        seed[scheme.id] = cached;
+      } else {
+        toRender.push({ scheme, key });
+      }
+    }
+    setPreviews(seed);
 
-    return () => { cancelled = true; };
-  }, [analyzed, baseImageData, width, height, schemes, surfacesByClass]);
+    (async () => {
+      if (toRender.length === 0) return;
+
+      // Base image downscaled once per run — every applyPaintColor pass below
+      // operates on this bounded image, never on the 1600×1200 workspace.
+      const previewBase = await downscaleImageData(baseImageData, width, height, MAX_PREVIEW_DIM);
+
+      // Strictly sequential generation (concurrency 1). The old
+      // Promise.all(schemes.map(...)) fired N×M full-resolution LAB passes at
+      // once; this streams one bounded scheme at a time.
+      for (const { scheme, key } of toRender) {
+        if (cancelled || controller.signal.aborted) break;
+        try {
+          const canvas = await renderSchemePreview({
+            baseImageData: previewBase.imageData,
+            scheme,
+            surfacesByClass,
+            width: previewBase.width,
+            height: previewBase.height,
+            signal: controller.signal,
+          });
+          if (cancelled || controller.signal.aborted || !canvas) break;
+          const entry = { url: canvas.toDataURL('image/png'), canvas };
+          PREVIEW_CACHE.set(key, entry);
+          setPreviews((prev) => ({ ...prev, [scheme.id]: entry }));
+        } catch (err) {
+          if (cancelled || err?.name === 'AbortError') break;
+          // Error isolation: one failed preview becomes a placeholder, never
+          // a crashed panel.
+          setPreviews((prev) => ({ ...prev, [scheme.id]: FAILED_PREVIEW }));
+        }
+      }
+    })().catch(() => {});
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [analyzed, baseImageData, width, height, schemes, surfacesByClass, assetId, analysisId]);
 
   async function runGenerate() {
     try {
@@ -100,8 +156,8 @@ export default function RecommendationsTab({ projectId, assetId, width, height, 
   // plus surfaceClass -> paintId, so it re-applies as real layers later.
   async function saveAsConcept(scheme) {
     const preview = previews[scheme.id];
-    if (!preview) {
-      showToast('Preview is still rendering — try again in a moment.', { variant: 'danger' });
+    if (!preview || preview.failed) {
+      showToast('Preview is still rendering or unavailable — try again in a moment.', { variant: 'danger' });
       return;
     }
     try {
@@ -109,7 +165,7 @@ export default function RecommendationsTab({ projectId, assetId, width, height, 
       for (const s of scheme.surfaces || []) {
         if (s.paintId) layerColorMap[s.surfaceClass] = s.paintId;
       }
-      const thumbnailBlob = await canvasToThumbnailBlob(preview);
+      const thumbnailBlob = await canvasToThumbnailBlob(preview.canvas);
       await saveConcept.mutateAsync({ name: scheme.name, layerColorMap, thumbnailBlob });
       setSavedNames((prev) => ({ ...prev, [scheme.id]: true }));
       showToast(`Saved "${scheme.name}" as a concept.`);
@@ -155,19 +211,23 @@ export default function RecommendationsTab({ projectId, assetId, width, height, 
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 <Button size="sm" variant="secondary" onClick={() => apply(scheme)}>Apply</Button>
-                <Button size="sm" variant="ghost" onClick={() => saveAsConcept(scheme)} disabled={saveConcept.isPending || !previews[scheme.id]}>
+                <Button size="sm" variant="ghost" onClick={() => saveAsConcept(scheme)} disabled={saveConcept.isPending || !previews[scheme.id]?.canvas}>
                   {savedNames[scheme.id] ? <Check size={14} /> : <BookmarkPlus size={14} />}
                 </Button>
               </div>
             </div>
 
             <div className="mt-2 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--paper-raised)] overflow-hidden">
-              {previews[scheme.id] ? (
+              {previews[scheme.id]?.url ? (
                 <img
-                  src={previews[scheme.id].toDataURL('image/png')}
+                  src={previews[scheme.id].url}
                   alt={`${scheme.name} preview`}
                   className="w-full h-28 object-cover"
                 />
+              ) : previews[scheme.id]?.failed ? (
+                <div className="h-28 flex items-center justify-center text-[11px] text-[var(--danger)]">
+                  Preview unavailable
+                </div>
               ) : (
                 <div className="h-28 flex items-center justify-center text-[11px] text-[var(--graphite)]">
                   Rendering preview…

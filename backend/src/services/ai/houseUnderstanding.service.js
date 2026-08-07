@@ -28,7 +28,7 @@ async function analyzeAsset(assetId) {
     throw err;
   }
 
-  const buffer = storage.readFile(asset.original_path);
+  const buffer = await storage.readFile(asset.original_path);
   const job = await aiJobsModel.createJob({
     assetId: asset.id,
     jobType: 'house-understanding',
@@ -119,7 +119,7 @@ async function saveMask(assetId, filename, mask) {
     img.bitmap.data[idx + 3] = mask.alpha[y * mask.width + x];
   });
   const png = await img.getBufferAsync(Jimp.MIME_PNG);
-  return storage.saveBuffer(path.join(assetId, 'ai'), filename, png);
+  return await storage.saveBuffer(path.join(assetId, 'ai'), filename, png);
 }
 
 module.exports = { analyzeAsset, getAnalysis };

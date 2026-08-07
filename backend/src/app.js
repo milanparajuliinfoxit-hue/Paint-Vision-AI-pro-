@@ -49,10 +49,10 @@ app.use('/api/meta', metaRoutes);
 
 // Serve stored images through a controlled route rather than exposing the
 // upload folder directly — keeps the door open for access control later.
-app.get('/files/*', (req, res, next) => {
+app.get('/files/*', async (req, res, next) => {
   try {
     const relativePath = req.params[0];
-    if (!storage.exists(relativePath)) return res.status(404).json({ error: 'File not found' });
+    if (!(await storage.exists(relativePath))) return res.status(404).json({ error: 'File not found' });
     res.sendFile(storage.absolutePath(relativePath));
   } catch (err) { next(err); }
 });
