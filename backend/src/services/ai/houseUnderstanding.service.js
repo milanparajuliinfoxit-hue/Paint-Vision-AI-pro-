@@ -14,6 +14,7 @@ const aiRegistry = require('./aiRegistry.service');
 const assetsModel = require('../assets.model');
 const storage = require('../storage.service');
 const aiJobsModel = require('../aiJobs.model');
+const surfaceQuality = require('./surfaceQuality.service');
 
 async function analyzeAsset(assetId) {
   const asset = await assetsModel.getAsset(assetId);
@@ -48,9 +49,23 @@ async function analyzeAsset(assetId) {
 
   const out = result.output;
 
+  // Surface-quality validation (Phase 5): score every surface on geometric
+  // plausibility, house containment, and non-paintable-object overlap, not
+  // just the provider's own confidence number. Stored in the existing
+  // `properties` JSON column — no schema change — and read back by
+  // paintRecommendation.service.js to keep low-quality surfaces out of
+  // automatic scheme generation while still showing them in the AI
+  // Understand tab.
+  const objectMasks = (out.objects || []).map((o) => o.mask).filter(Boolean);
   const surfaces = [];
   for (const s of out.surfaces || []) {
     const maskPath = s.mask ? await saveMask(asset.id, `${s.key}.png`, s.mask) : null;
+    const quality = surfaceQuality.scoreSurface(s, {
+      houseBbox: out.house?.bbox,
+      width: out.scale?.width,
+      height: out.scale?.height,
+      objectMasks,
+    });
     surfaces.push(await aiJobsModel.createSurface({
       analysisId: job.id,
       assetId: asset.id,
@@ -61,7 +76,7 @@ async function analyzeAsset(assetId) {
       maskPath,
       geometry: s.geometry ?? null,
       averageColor: s.averageColor ?? null,
-      properties: s.properties ?? null,
+      properties: { ...(s.properties || {}), quality },
     }));
   }
 

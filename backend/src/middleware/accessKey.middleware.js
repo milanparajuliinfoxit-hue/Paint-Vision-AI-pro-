@@ -4,17 +4,24 @@
  * a shared key so the API isn't wide open on the public internet.
  * Remove entirely if the app will only ever run on a private network.
  */
-function requireAccessKey(req, res, next) {
+
+// True when no real key is configured (unset, or still the .env.example
+// placeholder) — the app intentionally stays open in that case for local/LAN
+// dev convenience, but every caller that checks a key funnels through this
+// one function so that behavior can't drift between routes.
+function keyNotConfigured() {
   const configuredKey = process.env.API_ACCESS_KEY;
-  if (!configuredKey || configuredKey === 'change-me-long-random-string') {
-    // Not configured — allow through in local dev, but this should be set before deploying.
-    return next();
-  }
-  const providedKey = req.header('x-api-key');
-  if (providedKey !== configuredKey) {
-    return res.status(401).json({ error: 'Invalid or missing API key' });
-  }
-  next();
+  return !configuredKey || configuredKey === 'change-me-long-random-string';
 }
 
-module.exports = { requireAccessKey };
+function isValidKey(providedKey) {
+  if (keyNotConfigured()) return true;
+  return providedKey === process.env.API_ACCESS_KEY;
+}
+
+function requireAccessKey(req, res, next) {
+  if (isValidKey(req.header('x-api-key'))) return next();
+  return res.status(401).json({ error: 'Invalid or missing API key' });
+}
+
+module.exports = { requireAccessKey, isValidKey, keyNotConfigured };

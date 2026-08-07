@@ -1,11 +1,13 @@
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const Jimp = require('jimp');
 const storage = require('../services/storage.service');
 const assetsModel = require('../services/assets.model');
 const projectsModel = require('../services/projects.model');
 const layersModel = require('../services/layers.model');
 const aiJobsModel = require('../services/aiJobs.model');
 const aiProxy = require('../services/aiProxy.service');
+const objectRemovalMask = require('../services/ai/objectRemovalMask.service');
 
 async function uploadAsset(req, res, next) {
   try {
@@ -58,7 +60,18 @@ async function requestCleanup(req, res, next) {
     await assetsModel.updateAssetStatus(asset.id, { status: 'cleaning' });
 
     const imageBuffer = await storage.readFile(asset.original_path);
-    const maskBuffer = req.file ? req.file.buffer : null; // optional user-drawn "remove this" mask
+    // An explicit user-drawn mask always wins outright — no merging, no
+    // second-guessing a deliberate selection. Only when the dealer hasn't
+    // drawn anything do we fall back to a mask built from the asset's own
+    // house-understanding (detected tree/car/person/fence, house surfaces
+    // always protected — see objectRemovalMask.service.js). If there's no
+    // analysis yet, or nothing removable was detected, this resolves to
+    // null and cleanup runs exactly as it did before this feature existed.
+    let maskBuffer = req.file ? req.file.buffer : null;
+    if (!maskBuffer) {
+      const dims = await Jimp.read(imageBuffer);
+      maskBuffer = await objectRemovalMask.buildDefaultRemovalMask(asset.id, dims.bitmap.width, dims.bitmap.height);
+    }
 
     const cleanedBuffer = await aiProxy.callCleanup(imageBuffer, maskBuffer);
 

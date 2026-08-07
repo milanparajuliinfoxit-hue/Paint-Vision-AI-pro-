@@ -24,6 +24,7 @@ import Inspector from './panels/Inspector';
 import SaveStatusIndicator from './panels/SaveStatusIndicator';
 import ExportPanel from './panels/ExportPanel';
 import ComparisonPreview from './panels/ComparisonPreview';
+import AiPipelineStatusBar from './panels/AiPipelineStatusBar';
 import { Button } from '../../shared/ui/button';
 import { Sheet, SheetTrigger, SheetContent } from '../../shared/ui/sheet';
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '../../shared/ui/tooltip';
@@ -188,6 +189,15 @@ export default function VisualizerWorkspace({ onColorFocus }) {
     return (paintId) => (paintId ? byId.get(paintId) || null : null);
   }, [catalogRows]);
 
+  // Precomputed once per catalog load instead of per eyedropper click —
+  // rgbToLab is a handful of pow()/cbrt() calls per paint, and re-running it
+  // over the full catalog (up to 2000 rows) on every click was pure waste
+  // since the catalog's own colors never change between clicks.
+  const catalogLab = useMemo(
+    () => catalogRows.map((paint) => ({ paint, lab: rgbToLab(paint.r_value, paint.g_value, paint.b_value) })),
+    [catalogRows]
+  );
+
   useEffect(() => {
     if (pendingColorRgb) onColorFocus?.(rgbToHex(pendingColorRgb));
   }, [pendingColorRgb, onColorFocus]);
@@ -258,8 +268,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
 
     let nearest = null;
     let nearestDist = Infinity;
-    for (const paint of catalogRows) {
-      const lab = rgbToLab(paint.r_value, paint.g_value, paint.b_value);
+    for (const { paint, lab } of catalogLab) {
       const dist = Math.sqrt((lab.l - sampledLab.l) ** 2 + (lab.a - sampledLab.a) ** 2 + (lab.b - sampledLab.b) ** 2);
       if (dist < nearestDist) { nearestDist = dist; nearest = paint; }
     }
@@ -374,6 +383,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
     return (
       <div className="flex flex-col h-full overflow-hidden">
         {header}
+        <AiPipelineStatusBar assetId={activeAssetId} />
         <div className="flex items-center gap-2 border-b border-[var(--warning)]/20 bg-[var(--warning)]/10 px-4 py-2 text-xs font-medium text-[var(--graphite-dark)]">
           <Info size={14} className="shrink-0 text-[var(--warning)]" />
           Editing tools need more screen space — this view is read/compare-only on phone-sized screens.
@@ -394,6 +404,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {header}
+      <AiPipelineStatusBar assetId={activeAssetId} />
 
       <div className="flex flex-1 min-h-0">
         {/* Full side panel >=1280px */}

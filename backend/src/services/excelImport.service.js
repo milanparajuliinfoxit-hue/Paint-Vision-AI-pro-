@@ -30,12 +30,16 @@ async function previewImport(buffer) {
       continue;
     }
 
-    const existing = await paintsModel.findByColorCode(parsed.data.color_code);
+    // includeDeleted so a re-import of a previously soft-deleted color is
+    // classified as 'update' (which revives it) rather than 'create', which
+    // would otherwise hit the color_code unique constraint mid-commit.
+    const existing = await paintsModel.findByColorCode(parsed.data.color_code, { includeDeleted: true });
     report.valid.push({
       row: rowNum,
       data: parsed.data,
       action: existing ? 'update' : 'create',
       existingId: existing ? existing.id : null,
+      revives: !!(existing && existing.is_deleted),
     });
   }
 
@@ -68,14 +72,14 @@ async function commitImport({ validRows, fileName, duplicateStrategy = 'update' 
           continue;
         }
         if (duplicateStrategy === 'create_new') {
-          await paintsModel.create(row.data);
+          await paintsModel.create(row.data, conn);
           created++;
           continue;
         }
-        await paintsModel.update(row.existingId, row.data);
+        await paintsModel.update(row.existingId, row.data, conn);
         updated++;
       } else {
-        await paintsModel.create(row.data);
+        await paintsModel.create(row.data, conn);
         created++;
       }
     }
@@ -120,9 +124,10 @@ function exportToBuffer(paints) {
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 }
 
-// Maps the exact source Excel headers to our DB column names.
-// NOTE: the source file's `id` column is ambiguous with our own auto-increment PK.
-// We treat the Excel `id` as ignorable and `s_id` as the traceable source id — confirm this is correct.
+// Maps the exact source Excel headers to our DB column names. The source
+// file's `id` column is the exporting system's own row number and is
+// intentionally dropped (see EXCEL_COLUMN_MAP note); `s_id` is the real,
+// stable source-product identifier and is what we import and match on.
 function mapRow(rawRow) {
   const mapped = {};
   for (const [excelKey, dbKey] of Object.entries(EXCEL_COLUMN_MAP)) {

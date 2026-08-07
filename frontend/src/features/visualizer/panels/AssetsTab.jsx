@@ -5,6 +5,7 @@ import {
 } from '../hooks/useAssets';
 import { useLayersList } from '../hooks/useLayers';
 import { useAssetAnalysis } from '../hooks/useAiAnalysis';
+import { useStartAiPipeline } from '../hooks/useAiPipeline';
 import { useApplyConcept, useConcepts } from '../hooks/useConcepts';
 import { assets as assetsApi, exportsApi } from '../../../shared/lib/api';
 import { Button } from '../../../shared/ui/button';
@@ -44,6 +45,7 @@ export default function AssetsTab({ projectId, activeAssetId, onSelectAsset, wid
   const setCompareState = useVisualizerStore((s) => s.setCompareState);
   const { data: assetList = [] } = useAssetsList(projectId);
   const uploadAsset = useUploadAsset(projectId);
+  const startAiPipeline = useStartAiPipeline();
   const cleanAsset = useCleanAsset(projectId);
   const renameAsset = useRenameAsset(projectId);
   const deleteAsset = useDeleteAsset(projectId);
@@ -86,6 +88,13 @@ export default function AssetsTab({ projectId, activeAssetId, onSelectAsset, wid
     try {
       const asset = await uploadAsset.mutateAsync(file);
       onSelectAsset(asset.id);
+      // Fire the autonomous pipeline (house-understanding -> schemes) right
+      // after upload instead of waiting for a manual "Analyze" click. Not
+      // awaited — the pipeline runs server-side and the dealer keeps working;
+      // AiPipelineStatusBar (polling ai/status) surfaces progress. A failure
+      // to *start* it (e.g. a network blip) isn't an upload failure and
+      // isn't shown as one — the "Try again" affordance covers recovery.
+      startAiPipeline.mutate({ assetId: asset.id });
     } catch (err) {
       showToast(`Upload failed: ${err.message}`, { variant: 'danger' });
     }
@@ -147,7 +156,13 @@ export default function AssetsTab({ projectId, activeAssetId, onSelectAsset, wid
         </div>
         <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px]">
           {!asset.cleaned_path && asset.status !== 'cleaning' && (
-            <button className="text-[var(--signal)] hover:underline" onClick={() => handleCleanup(asset.id)}>Run AI cleanup</button>
+            <button
+              className="text-[var(--signal)] hover:underline"
+              title="If this photo has been analyzed, automatically removes detected trees, cars, people, and fences — house surfaces are never touched."
+              onClick={() => handleCleanup(asset.id)}
+            >
+              Run AI cleanup
+            </button>
           )}
           <button className="text-[var(--graphite)] hover:underline" onClick={() => setRenamingAsset(asset)}>Rename</button>
           <button className="text-[var(--graphite)] hover:underline" onClick={() => handleDuplicate(asset)}>Duplicate</button>

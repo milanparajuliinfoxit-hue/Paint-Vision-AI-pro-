@@ -10,6 +10,7 @@
  * rest of the app — these tables only store metadata + file references.
  */
 const pool = require('../config/db');
+const { classifyObject } = require('./ai/objectClassification');
 
 async function createJob({ assetId, jobType, provider }) {
   const [result] = await pool.query(
@@ -156,6 +157,11 @@ function decodeSurface(row) {
 function decodeObject(row) {
   return {
     ...row,
+    // PAINTABLE / NON-PAINTABLE HOUSE COMPONENT / UNRELATED OBJECT — the
+    // detected_surfaces `paintable` flag covers the first, this covers the
+    // other two. Computed from class_key, not stored (see
+    // objectClassification.js) — always in sync with the removal mask.
+    category: classifyObject(row.class_key),
     geometry: parseJson(row.geometry),
   };
 }

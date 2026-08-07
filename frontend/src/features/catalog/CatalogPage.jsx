@@ -20,6 +20,7 @@ export default function CatalogPage({ onColorFocus }) {
   const [showImport, setShowImport] = useState(false);
   const [editing, setEditing] = useState(null); // paint object or 'new'
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const { isFavorite, toggleFavorite, recentPaints, markRecentlyUsed } = useFavorites();
   const gridRef = useRef(null);
@@ -60,6 +61,29 @@ export default function CatalogPage({ onColorFocus }) {
 
   useEffect(() => { load(); }, [search, productLine, page, hexQuery, favoritesOnly]); // eslint-disable-line
 
+  // Fetches the catalog export through `request` (which attaches the
+  // x-api-key header) and turns the resulting blob into a browser download —
+  // a plain <a href> to the API route can't attach that header and 401s
+  // once a real key is configured.
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const blob = await catalog.export();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `paint-catalog-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      window.alert(`Export failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   function pickColor(paint) {
     onColorFocus(paint.hex_value);
     markRecentlyUsed({ id: paint.id, color_name: paint.color_name, color_code: paint.color_code, hex_value: paint.hex_value });
@@ -94,7 +118,7 @@ export default function CatalogPage({ onColorFocus }) {
         </div>
         <div className="flex gap-2">
           <button onClick={() => setShowImport(true)} style={secondaryBtn}>Import Excel</button>
-          <a href={catalog.exportUrl()} style={{ ...secondaryBtn, textDecoration: 'none', display: 'inline-block' }}>Export</a>
+          <button onClick={handleExport} disabled={exporting} style={secondaryBtn}>{exporting ? 'Exporting…' : 'Export'}</button>
           <button onClick={() => setEditing('new')} style={primaryBtn}>+ Add color</button>
         </div>
       </header>

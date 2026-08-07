@@ -69,7 +69,11 @@ export const catalog = {
     return request('/api/catalog/import/preview', { method: 'POST', body: form });
   },
   commitImport: (payload) => request('/api/catalog/import/commit', { method: 'POST', body: JSON.stringify(payload) }),
-  exportUrl: () => `${BASE_URL}/api/catalog/import/export`,
+  // A plain <a href> to this endpoint can't attach the x-api-key header, so
+  // it 401s the moment a real key is configured (which .env already has) —
+  // fetch it as a blob through `request` (which does attach the header)
+  // instead; the caller turns the blob into a download.
+  export: () => request('/api/catalog/import/export'),
 };
 
 // --- Projects ---
@@ -101,7 +105,14 @@ export const assets = {
     if (maskBlob) form.append('mask', maskBlob);
     return request(`/api/assets/${assetId}/clean`, { method: 'POST', body: form }, LONG_TIMEOUT_MS);
   },
-  fileUrl: (relativePath) => `${BASE_URL}/files/${String(relativePath).replace(/\\/g, '/')}`,
+  // /files/* is gated by the same access key as /api (see backend app.js) —
+  // but this URL is consumed directly by <img src>/Konva Image, which can't
+  // attach the x-api-key header, so the key travels as a query param here
+  // instead (only here; every other request still uses the header).
+  fileUrl: (relativePath) => {
+    const path = `${BASE_URL}/files/${String(relativePath).replace(/\\/g, '/')}`;
+    return API_KEY ? `${path}?key=${encodeURIComponent(API_KEY)}` : path;
+  },
 };
 
 // --- Layers (masked, re-colorable surface regions on an asset) ---
@@ -136,6 +147,11 @@ export const ai = {
   generateRecommendations: (assetId, count) =>
     request(`/api/assets/${assetId}/ai/recommendations`, { method: 'POST', body: JSON.stringify({ count }) }, LONG_TIMEOUT_MS),
   listRecommendations: (assetId) => request(`/api/assets/${assetId}/ai/recommendations`),
+  // Autonomous pipeline: process() starts (or no-ops if already running/done);
+  // getStatus() is the lightweight, frequently-polled read.
+  process: (assetId, { force } = {}) =>
+    request(`/api/assets/${assetId}/ai/process`, { method: 'POST', body: JSON.stringify({ force: !!force }) }, LONG_TIMEOUT_MS),
+  getStatus: (assetId) => request(`/api/assets/${assetId}/ai/status`),
 };
 
 // --- History (append-only undo/redo log, persisted per project) ---

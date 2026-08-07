@@ -20,9 +20,15 @@ async function ensureDir(relativeDir) {
 }
 
 function absolutePath(relativePath) {
-  const full = path.join(UPLOAD_ROOT, relativePath);
-  // Guard against path traversal outside the upload root.
-  if (!full.startsWith(UPLOAD_ROOT)) {
+  const full = path.resolve(UPLOAD_ROOT, relativePath);
+  // Guard against path traversal outside the upload root. A plain
+  // full.startsWith(UPLOAD_ROOT) string check is bypassable by a
+  // sibling-prefix path (e.g. UPLOAD_ROOT '/data/uploads' would also match
+  // '/data/uploads-evil/x.png') — path.relative + containment doesn't have
+  // that gap, since a genuine escape always starts with '..' or resolves to
+  // a different root entirely (absolute on the other side).
+  const rel = path.relative(UPLOAD_ROOT, full);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error('Invalid path');
   }
   return full;
