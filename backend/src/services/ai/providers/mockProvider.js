@@ -173,6 +173,14 @@ async function analyze(buffer) {
   const hasRoof = roofRowCount >= Math.max(2, bandH * 0.04);
 
   // --- Mask helpers bound to this image ------------------------------------
+  // Internal masks are 0/1 booleans (dilate/connectedComponents/countOn all
+  // rely on that) — the output contract's alpha channel is a 0-255 "selection
+  // strength" (see colorEngine.applyPaintColor), so scale only at the boundary.
+  const toAlpha255 = (m) => {
+    const out = new Uint8Array(m.length);
+    for (let i = 0; i < m.length; i++) out[i] = m[i] ? 255 : 0;
+    return out;
+  };
   const countOn = (m) => {
     let c = 0;
     for (let i = 0; i < m.length; i++) c += m[i];
@@ -205,7 +213,7 @@ async function analyze(buffer) {
       paintable: meta.paintable,
       role: (props && props.role) || meta.role || null,
       confidence,
-      mask: { width: W, height: H, alpha: mask.slice() },
+      mask: { width: W, height: H, alpha: toAlpha255(mask) },
       geometry: { bbox: maskBbox(mask), areaPx: countOn(mask), areaRatio: countOn(mask) / N },
       averageColor: avgOf(mask),
       properties: props || {},
@@ -321,7 +329,7 @@ async function analyze(buffer) {
         displayName: CLASS_META.tree.name,
         paintable: false,
         confidence: 0.6,
-        mask: { width: W, height: H, alpha: cm },
+        mask: { width: W, height: H, alpha: toAlpha255(cm) },
         geometry: { bbox: { x: c.minX, y: c.minY, w: c.maxX - c.minX + 1, h: c.maxY - c.minY + 1 }, areaPx: c.size, areaRatio: c.size / N },
       });
     }
@@ -356,7 +364,7 @@ async function analyze(buffer) {
         displayName: CLASS_META.obstacle.name,
         paintable: false,
         confidence: 0.35,
-        mask: { width: W, height: H, alpha: cm },
+        mask: { width: W, height: H, alpha: toAlpha255(cm) },
         geometry: { bbox: { x: c.minX, y: c.minY, w: c.maxX - c.minX + 1, h: c.maxY - c.minY + 1 }, areaPx: c.size, areaRatio: c.size / N },
       });
     }
@@ -384,7 +392,7 @@ async function analyze(buffer) {
           displayName: CLASS_META['neighbor-house'].name,
           paintable: false,
           confidence: 0.5,
-          mask: { width: W, height: H, alpha: cm },
+          mask: { width: W, height: H, alpha: toAlpha255(cm) },
           geometry: { bbox: { x: c.minX, y: c.minY, w: c.maxX - c.minX + 1, h: c.maxY - c.minY + 1 }, areaPx: c.size, areaRatio: c.size / N },
         });
       }

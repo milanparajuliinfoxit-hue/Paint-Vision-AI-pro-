@@ -1,15 +1,38 @@
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 const API_KEY = import.meta.env.VITE_API_ACCESS_KEY || '';
 
-async function request(path, options = {}) {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(API_KEY ? { 'x-api-key': API_KEY } : {}),
-      ...options.headers,
-    },
-  });
+// Default timeout for ordinary CRUD calls; AI analysis/recommendations and
+// image cleanup run real model inference server-side and need much longer.
+const DEFAULT_TIMEOUT_MS = 15000;
+const LONG_TIMEOUT_MS = 60000;
+
+async function request(path, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+        ...(API_KEY ? { 'x-api-key': API_KEY } : {}),
+        ...options.headers,
+      },
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      const timeoutErr = new Error('Request timed out. Please check your connection and try again.');
+      timeoutErr.isTimeout = true;
+      throw timeoutErr;
+    }
+    const networkErr = new Error('Network error. Please check your connection and try again.');
+    networkErr.isNetworkError = true;
+    networkErr.cause = err;
+    throw networkErr;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const err = new Error(body.error || `Request failed: ${res.status}`);
@@ -76,7 +99,7 @@ export const assets = {
   clean: (assetId, maskBlob) => {
     const form = new FormData();
     if (maskBlob) form.append('mask', maskBlob);
-    return request(`/api/assets/${assetId}/clean`, { method: 'POST', body: form });
+    return request(`/api/assets/${assetId}/clean`, { method: 'POST', body: form }, LONG_TIMEOUT_MS);
   },
   fileUrl: (relativePath) => `${BASE_URL}/files/${String(relativePath).replace(/\\/g, '/')}`,
 };
@@ -108,10 +131,10 @@ export const meta = {
 
 // --- AI (house-understanding + catalog-only paint recommendations) ---
 export const ai = {
-  analyze: (assetId) => request(`/api/assets/${assetId}/ai/analyze`, { method: 'POST' }),
+  analyze: (assetId) => request(`/api/assets/${assetId}/ai/analyze`, { method: 'POST' }, LONG_TIMEOUT_MS),
   getAnalysis: (assetId) => request(`/api/assets/${assetId}/ai/analysis`),
   generateRecommendations: (assetId, count) =>
-    request(`/api/assets/${assetId}/ai/recommendations`, { method: 'POST', body: JSON.stringify({ count }) }),
+    request(`/api/assets/${assetId}/ai/recommendations`, { method: 'POST', body: JSON.stringify({ count }) }, LONG_TIMEOUT_MS),
   listRecommendations: (assetId) => request(`/api/assets/${assetId}/ai/recommendations`),
 };
 

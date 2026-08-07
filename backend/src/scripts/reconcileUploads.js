@@ -63,12 +63,12 @@ async function main() {
     if (knownIds.has(id)) continue;
     const rel = path.relative(root, folder);
     const original = path.join(rel, 'original.jpg');
-    if (!storage.exists(original)) continue; // folder without a usable original
+    if (!(await storage.exists(original))) continue; // folder without a usable original
     const cleaned = path.join(rel, 'cleaned.jpg');
     orphans.push({
       id,
       originalPath: original,
-      cleanedPath: storage.exists(cleaned) ? cleaned : null,
+      cleanedPath: (await storage.exists(cleaned)) ? cleaned : null,
     });
   }
 

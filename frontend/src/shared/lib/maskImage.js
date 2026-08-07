@@ -4,20 +4,36 @@
 // here keeps the pixel handling in one place (previously duplicated across
 // useAiAnalysis.js / useApplySurface.js / VisualizerWorkspace.jsx).
 
-export function loadImage(url) {
+export function loadImage(url, signal) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('Image failed to load'));
+    const onAbort = () => {
+      img.src = '';
+      reject(createAbortError());
+    };
+    const done = () => signal?.removeEventListener('abort', onAbort);
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    img.onload = () => { done(); resolve(img); };
+    img.onerror = () => { done(); reject(new Error('Image failed to load')); };
     img.src = url;
   });
 }
 
+function createAbortError() {
+  const err = new Error('Image load aborted');
+  err.name = 'AbortError';
+  return err;
+}
+
 // Draws a mask image up to width x height and returns its full ImageData —
 // used as the merge base for brush mask edits.
-export async function loadMaskImageData(url, width, height) {
-  const img = await loadImage(url);
+export async function loadMaskImageData(url, width, height, signal) {
+  const img = await loadImage(url, signal);
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;

@@ -1,3 +1,4 @@
+const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const storage = require('../services/storage.service');
 const assetsModel = require('../services/assets.model');
@@ -19,7 +20,7 @@ async function uploadAsset(req, res, next) {
     // UPLOAD_ROOT already ends in the app's uploads folder — asset.id alone
     // is enough, no need to re-nest under another 'uploads' segment.
     const relativeDir = asset.id;
-    const relativePath = storage.saveBuffer(relativeDir, 'original.jpg', req.file.buffer);
+    const relativePath = await storage.saveBuffer(relativeDir, 'original.jpg', req.file.buffer);
     const updated = await assetsModel.updateAssetOriginalPath(asset.id, relativePath);
 
     // First photo on a project becomes its cover thumbnail automatically —
@@ -56,7 +57,7 @@ async function requestCleanup(req, res, next) {
 
     await assetsModel.updateAssetStatus(asset.id, { status: 'cleaning' });
 
-    const imageBuffer = storage.readFile(asset.original_path);
+    const imageBuffer = await storage.readFile(asset.original_path);
     const maskBuffer = req.file ? req.file.buffer : null; // optional user-drawn "remove this" mask
 
     const cleanedBuffer = await aiProxy.callCleanup(imageBuffer, maskBuffer);
@@ -64,7 +65,7 @@ async function requestCleanup(req, res, next) {
     // UPLOAD_ROOT already ends in the app's uploads folder — asset.id alone
     // is enough, no need to re-nest under another 'uploads' segment.
     const relativeDir = asset.id;
-    const cleanedPath = storage.saveBuffer(relativeDir, 'cleaned.jpg', cleanedBuffer);
+    const cleanedPath = await storage.saveBuffer(relativeDir, 'cleaned.jpg', cleanedBuffer);
 
     const updated = await assetsModel.updateAssetStatus(asset.id, { status: 'cleaned', cleanedPath });
     res.json(updated);
@@ -109,14 +110,14 @@ async function deleteAsset(req, res, next) {
       await projectsModel.updateProject(project.id, { coverAssetId: remaining[0]?.id || null });
     }
 
-    storage.deleteFile(asset.original_path);
-    if (asset.cleaned_path) storage.deleteFile(asset.cleaned_path);
+    await storage.deleteFile(asset.original_path);
+    if (asset.cleaned_path) await storage.deleteFile(asset.cleaned_path);
     for (const layer of layers) {
-      if (layer.mask_path) storage.deleteFile(layer.mask_path);
+      if (layer.mask_path) await storage.deleteFile(layer.mask_path);
     }
-    for (const maskPath of aiMaskPaths) storage.deleteFile(maskPath);
-    storage.deleteDirIfEmpty(path.join(asset.id, 'ai'));
-    storage.deleteDirIfEmpty(asset.id);
+    for (const maskPath of aiMaskPaths) await storage.deleteFile(maskPath);
+    await storage.deleteDirIfEmpty(path.join(asset.id, 'ai'));
+    await storage.deleteDirIfEmpty(asset.id);
 
     res.status(204).end();
   } catch (err) { next(err); }
@@ -128,9 +129,9 @@ async function duplicateAsset(req, res, next) {
     if (!asset) return res.status(404).json({ error: 'Asset not found' });
 
     const newId = uuidv4();
-    const originalPath = storage.saveBuffer(newId, 'original.jpg', storage.readFile(asset.original_path));
+    const originalPath = await storage.saveBuffer(newId, 'original.jpg', await storage.readFile(asset.original_path));
     const cleanedPath = asset.cleaned_path
-      ? storage.saveBuffer(newId, 'cleaned.jpg', storage.readFile(asset.cleaned_path))
+      ? await storage.saveBuffer(newId, 'cleaned.jpg', await storage.readFile(asset.cleaned_path))
       : null;
 
     const copy = await assetsModel.insertDuplicate({
