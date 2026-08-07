@@ -9,6 +9,7 @@ const aiConfig = require('../config/aiConfig');
 const aiRegistry = require('../services/ai/aiRegistry.service');
 const houseUnderstanding = require('../services/ai/houseUnderstanding.service');
 const paintRecommendation = require('../services/ai/paintRecommendation.service');
+const aiPipeline = require('../services/ai/aiPipeline.service');
 
 async function analyzeAsset(req, res, next) {
   try {
@@ -43,6 +44,25 @@ async function listRecommendations(req, res, next) {
   }
 }
 
+// Starts (or reports the status of) the autonomous pipeline for an asset —
+// the frontend calls this right after upload so analysis + recommendations
+// run without the dealer clicking anything. Idempotent unless {force:true}.
+async function processAsset(req, res, next) {
+  try {
+    res.json(await aiPipeline.startPipeline(req.params.assetId, { force: !!(req.body && req.body.force) }));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getPipelineStatus(req, res, next) {
+  try {
+    res.json(await aiPipeline.getStatus(req.params.assetId));
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function getMeta(req, res, next) {
   try {
     res.json({
@@ -65,4 +85,7 @@ async function getMeta(req, res, next) {
   }
 }
 
-module.exports = { analyzeAsset, getAnalysis, generateRecommendations, listRecommendations, getMeta };
+module.exports = {
+  analyzeAsset, getAnalysis, generateRecommendations, listRecommendations, getMeta,
+  processAsset, getPipelineStatus,
+};

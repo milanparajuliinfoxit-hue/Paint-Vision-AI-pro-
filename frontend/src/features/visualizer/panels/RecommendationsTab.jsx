@@ -148,7 +148,14 @@ export default function RecommendationsTab({ projectId, assetId, width, height, 
       const layer = await applyScheme(scheme, surfacesByClass);
       showToast(layer ? `Applied "${scheme.name}" — paint the layers from the catalog.` : 'Nothing to apply — no paintable surfaces detected.');
     } catch (err) {
-      showToast(err.message || 'Could not apply scheme.', { variant: 'danger' });
+      // applyScheme creates one layer per surface with sequential requests —
+      // a failure partway through leaves whichever surfaces already
+      // succeeded as real layers. That's safe to resolve (not corrupted
+      // state) because every apply is idempotent server-side (upsert on
+      // ai_analysis_id + ai_surface_key, see useApplySurface.js) — clicking
+      // Apply again re-applies the whole scheme and only touches the
+      // surfaces that didn't finish, without duplicating the ones that did.
+      showToast(`${err.message || 'Could not finish applying the scheme.'} Some colors may already be applied — click Apply again to finish the rest.`, { variant: 'danger' });
     }
   }
 

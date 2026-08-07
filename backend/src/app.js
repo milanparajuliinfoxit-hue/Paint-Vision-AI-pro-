@@ -5,7 +5,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 
-const { requireAccessKey } = require('./middleware/accessKey.middleware');
+const { requireAccessKey, isValidKey } = require('./middleware/accessKey.middleware');
 const { errorHandler } = require('./middleware/errorHandler.middleware');
 
 const paintsRoutes = require('./routes/paints.routes');
@@ -48,9 +48,17 @@ app.use('/api/exports', exportsRoutes);
 app.use('/api/meta', metaRoutes);
 
 // Serve stored images through a controlled route rather than exposing the
-// upload folder directly — keeps the door open for access control later.
+// upload folder directly. This is every photo, mask, concept thumbnail, and
+// export the app has ever stored, so it carries the same access-key gate as
+// /api — but a plain <img src>/Konva Image load can't attach the x-api-key
+// header, so the key is also accepted as a ?key= query param here (and only
+// here; /api never accepts it that way, since query strings end up in
+// server logs and browser history more readily than headers do).
 app.get('/files/*', async (req, res, next) => {
   try {
+    if (!isValidKey(req.header('x-api-key') || req.query.key)) {
+      return res.status(401).json({ error: 'Invalid or missing API key' });
+    }
     const relativePath = req.params[0];
     if (!(await storage.exists(relativePath))) return res.status(404).json({ error: 'File not found' });
     res.sendFile(storage.absolutePath(relativePath));

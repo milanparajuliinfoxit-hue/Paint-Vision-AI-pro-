@@ -20,8 +20,15 @@ const paintSchema = z.object({
 });
 
 // Same shape, but tolerant of the exact Excel header names from the source file.
+//
+// Resolved: the source file's `id` column is the exporting system's own
+// auto-increment row number, not a stable product identifier — reusing it
+// as our PK or as `s_id` would collide with (or be shadowed by) this app's
+// own auto-increment `paints.id` on every re-import. `s_id` is the real,
+// stable source-product identifier and is the only one we import;
+// `id` is intentionally dropped (mapRow skips it below).
 const EXCEL_COLUMN_MAP = {
-  id: 's_id_or_id', // ambiguous in source file — see importService notes
+  id: 's_id_or_id', // intentionally ignored — see note above
   s_id: 's_id',
   colorCode: 'color_code',
   colorName: 'color_name',

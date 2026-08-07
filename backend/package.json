@@ -9,7 +9,8 @@
     "dev": "nodemon src/server.js",
     "migrate": "node src/scripts/runSchema.js",
     "reconcile": "node src/scripts/reconcileUploads.js",
-    "smoke:vision": "node src/scripts/smokeVisionAssembly.js"
+    "smoke:vision": "node src/scripts/smokeVisionAssembly.js",
+    "test": "node --test"
   },
   "dependencies": {
     "cors": "^2.8.5",

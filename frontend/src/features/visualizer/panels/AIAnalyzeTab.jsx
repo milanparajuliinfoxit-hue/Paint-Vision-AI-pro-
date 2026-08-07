@@ -122,6 +122,7 @@ export default function AIAnalyzeTab({ projectId, assetId, width, height }) {
             {(analysis.surfaces || []).map((s) => {
               const role = s.properties?.role ? ROLE_LABELS[s.properties.role] || s.properties.role : null;
               const paintable = s.paintable;
+              const lowQuality = s.properties?.quality?.tier === 'low';
               return (
                 <li key={s.id} className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5">
                   <div className="min-w-0 flex-1">
@@ -129,6 +130,14 @@ export default function AIAnalyzeTab({ projectId, assetId, width, height }) {
                     <div className="flex items-center gap-1.5 text-[11px] text-[var(--graphite)]">
                       {role && <span>{role}</span>}
                       {s.confidence != null && <span>· {Math.round(s.confidence * 100)}%</span>}
+                      {lowQuality && (
+                        <span
+                          title="This mask didn't pass our quality checks (odd shape, size, or overlap with a detected object) — it's still here to use manually, but automatic color schemes skip it."
+                          className="rounded-full bg-[var(--warning)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--warning)]"
+                        >
+                          Needs review
+                        </span>
+                      )}
                     </div>
                   </div>
                   {paintable ? (
@@ -154,7 +163,9 @@ export default function AIAnalyzeTab({ projectId, assetId, width, height }) {
             {(analysis.objects || []).map((o) => (
               <li key={o.id} className="rounded-full border border-[var(--line)] bg-[var(--paper)] px-2.5 py-1 text-[11px] text-[var(--graphite)]">
                 {o.display_name}
-                <span className="ml-1 text-[10px] text-[var(--danger)]">never painted</span>
+                <span className="ml-1 text-[10px] text-[var(--danger)]">
+                  {o.category === 'unrelated-object' ? 'not part of the house · removable' : 'part of the house · never painted'}
+                </span>
               </li>
             ))}
           </ul>

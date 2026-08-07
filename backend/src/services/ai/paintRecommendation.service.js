@@ -12,6 +12,11 @@ const paintsModel = require('../paints.model');
 const aiJobsModel = require('../aiJobs.model');
 const recommendationsModel = require('../paintRecommendation.model');
 
+// job_type recorded for this capability's ai_jobs audit rows — also what the
+// pipeline orchestrator (aiPipeline.service.js) polls for to know a scheme
+// batch has actually been generated for the asset's current analysis.
+const JOB_TYPE = 'paint-recommendation';
+
 async function generateRecommendations(assetId, { count } = {}) {
   const asset = await assetsModel.getAsset(assetId);
   if (!asset) {
@@ -39,11 +44,29 @@ async function generateRecommendations(assetId, { count } = {}) {
     throw err;
   }
 
+  // Versioned audit row, same pattern as house-understanding — this is also
+  // what lets the pipeline orchestrator know a scheme batch actually ran
+  // (previously recommendation runs left no ai_jobs trail at all).
+  const job = await aiJobsModel.createJob({
+    assetId: asset.id,
+    jobType: JOB_TYPE,
+    provider: aiConfig.getProviderFor('paint-recommendation'),
+  });
+
+  // Phase 5 gate: a surface that failed quality validation (see
+  // surfaceQuality.service.js) still shows up in the AI Understand tab for
+  // the dealer to inspect/use manually, but never feeds automatic scheme
+  // generation — a bad mask shouldn't silently become part of a "confident"
+  // AI recommendation. Surfaces from analyses run before this existed have
+  // no `quality` field and are treated as eligible (no silent behavior
+  // change for already-persisted analyses).
+  const eligibleSurfaces = analysis.surfaces.filter((s) => s.properties?.quality?.tier !== 'low');
+
   const result = await aiRegistry.run('paint-recommendation', {
     analysis: {
       house: analysis.house,
       context: analysis.context,
-      surfaces: analysis.surfaces.map((s) => ({
+      surfaces: eligibleSurfaces.map((s) => ({
         className: s.class_key,
         role: s.properties && s.properties.role ? s.properties.role : null,
         paintable: s.paintable,
@@ -55,6 +78,7 @@ async function generateRecommendations(assetId, { count } = {}) {
   });
 
   if (!result.ok) {
+    await aiJobsModel.markFailed(job.id, result.failureReason);
     const err = new Error(result.failureReason);
     err.status = 502;
     throw err;
@@ -68,11 +92,18 @@ async function generateRecommendations(assetId, { count } = {}) {
       assetId: asset.id,
       schemeName: scheme.name,
       tagline: scheme.tagline,
-      rationale: { templateId: scheme.id, provider: result.provider, modelVersion: result.modelVersion },
+      rationale: { templateId: scheme.id, provider: result.provider, modelVersion: result.modelVersion, score: scheme.score ?? null },
       schemeJson: scheme.surfaces,
     });
     schemes.push(resolveScheme(row, paints));
   }
+
+  await aiJobsModel.markSuccess(job.id, {
+    confidence: result.confidence,
+    processingTimeMs: result.processingTimeMs,
+    modelVersion: result.modelVersion,
+    outputJson: { analysisId: analysis.job.id, count: schemes.length },
+  });
 
   return {
     schemes,

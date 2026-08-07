@@ -11,4 +11,10 @@ router.get('/analysis', ctrl.getAnalysis);
 router.post('/recommendations', ctrl.generateRecommendations);
 router.get('/recommendations', ctrl.listRecommendations);
 
+// Autonomous pipeline (Phase 2): frontend fires this right after upload
+// instead of requiring a manual "Analyze" click; /status is polled until
+// the stage reaches 'ready' or 'failed'.
+router.post('/process', ctrl.processAsset);
+router.get('/status', ctrl.getPipelineStatus);
+
 module.exports = router;

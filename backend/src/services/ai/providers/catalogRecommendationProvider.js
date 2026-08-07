@@ -139,7 +139,18 @@ async function run(capability, input) {
   if (!paints || !paints.length) throw new Error('The paint catalog is empty — cannot generate recommendations.');
   const pool = filterPool(paints, input.productLines);
   const schemeCount = Math.max(1, Math.min(10, Number(count) || 6));
-  const schemes = TEMPLATES.slice(0, schemeCount).map((t) => buildScheme(t, analysis, pool));
+
+  // Candidate generation -> ranking -> top N (Phase 8): every template is
+  // built and scored, not just the first `schemeCount` in template-definition
+  // order. A house's actual context (wall hue, roof color, and — above all —
+  // what's actually in *this* catalog) can make a template a poor fit even
+  // though the template itself is coherent; scoring instead of truncating
+  // means "this house suits neutrals better than coastal blues" is something
+  // the ranking can express instead of every house getting an identical menu.
+  const candidates = TEMPLATES.map((t) => buildScheme(t, analysis, pool));
+  candidates.sort((a, b) => b.score - a.score);
+  const schemes = candidates.slice(0, schemeCount);
+
   return { output: { schemes }, confidence: 1, modelVersion: VERSION };
 }
 
@@ -163,21 +174,37 @@ function buildScheme(template, analysis, pool) {
 
   const used = new Set();
   const surfaces = [];
+  const resolvedPaints = {}; // role -> paint row, kept alongside surfaces for scoreScheme below
+  let catalogFitLoss = 0; // sum of LAB distance between each role's ideal target and the nearest real paint
+  let scoredRoles = 0;
+
   for (const role of ROLE_ORDER) {
     if (!presentRoles.has(role)) continue;
     const spec = template.roles[role];
     if (!spec) continue;
 
     let paint;
+    let targetLab;
     if (spec.keep) {
       if (!ctx.roofColor) continue; // no roof in the analysis -> skip the role
-      paint = pick(pool, rgbToLab(ctx.roofColor.r, ctx.roofColor.g, ctx.roofColor.b), used, true);
+      targetLab = rgbToLab(ctx.roofColor.r, ctx.roofColor.g, ctx.roofColor.b);
+      paint = pick(pool, targetLab, used, true);
     } else {
       const target = targetFor(spec, wallHue, lighting);
-      paint = pick(pool, rgbToLab(target.r, target.g, target.b), used, false);
+      targetLab = rgbToLab(target.r, target.g, target.b);
+      paint = pick(pool, targetLab, used, false);
     }
     used.add(paint.id);
     surfaces.push({ role, surfaceClass: classForRole[role], paintId: paint.id });
+    resolvedPaints[role] = paint;
+
+    // Roof (`keep`) intentionally excluded from fit scoring — it's not a
+    // color-theory target, it's "match reality," so a distant catalog roof
+    // color isn't the template's fault.
+    if (!spec.keep) {
+      catalogFitLoss += labDistance(targetLab, rgbToLab(paint.r_value, paint.g_value, paint.b_value));
+      scoredRoles += 1;
+    }
   }
 
   return {
@@ -185,7 +212,44 @@ function buildScheme(template, analysis, pool) {
     name: template.name,
     tagline: template.tagline,
     surfaces,
+    score: scoreScheme({ catalogFitLoss, scoredRoles, resolvedPaints }),
   };
+}
+
+// Ranking (Phase 8): rewards templates the *actual* catalog can realize well
+// (small average LAB distance between each role's color-theory target and
+// the nearest real paint — a template whose ideal blues simply aren't
+// stocked shouldn't outrank one the catalog nails) and templates that
+// deliver real contrast between the primary wall and trim/doors (a scheme
+// where the "trim" is barely distinguishable from the wall reads as one flat
+// color, not a scheme — this is the brief's "contrast validation" step).
+function scoreScheme({ catalogFitLoss, scoredRoles, resolvedPaints }) {
+  // LAB distance of ~0 is a perfect catalog match; ~40+ is a poor one.
+  // Normalize to 0..1 (higher is better) and average across scored roles.
+  const avgLoss = scoredRoles > 0 ? catalogFitLoss / scoredRoles : 40;
+  const catalogFitScore = clamp(1 - avgLoss / 40, 0, 1);
+
+  const wall = resolvedPaints['primary-wall'];
+  let contrastScore = 0.5; // neutral when there's nothing to compare (e.g. no wall role present)
+  if (wall) {
+    const wallL = rgbToHsl(wall.r_value, wall.g_value, wall.b_value).l;
+    const deltas = ['trim', 'doors']
+      .map((role) => resolvedPaints[role])
+      .filter(Boolean)
+      .map((paint) => Math.abs(rgbToHsl(paint.r_value, paint.g_value, paint.b_value).l - wallL));
+    if (deltas.length) {
+      const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+      // A real coat of contrasting trim/door paint reads as >=0.15 lightness
+      // delta from the wall; less than that starts to look like one flat color.
+      contrastScore = clamp(avgDelta / 0.35, 0, 1);
+    }
+  }
+
+  return round3(0.65 * catalogFitScore + 0.35 * contrastScore);
+}
+
+function round3(v) {
+  return Math.round(v * 1000) / 1000;
 }
 
 function targetFor(spec, wallHue, lighting) {
