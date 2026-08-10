@@ -1,14 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
+import { readJson, writeJson } from '../../shared/lib/localStore';
 
 const COLLECTIONS_KEY = 'catalog-collections';
-
-function readJson(key, fallback) {
-  try {
-    return JSON.parse(localStorage.getItem(key)) ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
 
 function uid() {
   return `col_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -21,7 +14,7 @@ export function useCollections() {
   const [collections, setCollections] = useState(() => readJson(COLLECTIONS_KEY, []));
 
   useEffect(() => {
-    localStorage.setItem(COLLECTIONS_KEY, JSON.stringify(collections));
+    writeJson(COLLECTIONS_KEY, collections);
   }, [collections]);
 
   const createCollection = useCallback((name) => {

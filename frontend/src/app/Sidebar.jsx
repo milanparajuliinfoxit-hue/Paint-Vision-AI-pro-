@@ -10,6 +10,7 @@ import {
   Plus,
 } from 'lucide-react';
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '../shared/ui/tooltip';
+import { readString, writeString } from '../shared/lib/localStore';
 import { useMediaQuery } from '../shared/lib/useMediaQuery';
 import { cn } from '../shared/lib/cn';
 import CreateProjectModal from '../features/projects/CreateProjectModal';
@@ -31,11 +32,7 @@ const SECTIONS = [
 ];
 
 function readCollapsed() {
-  try {
-    return localStorage.getItem(COLLAPSED_KEY) === '1';
-  } catch {
-    return false;
-  }
+  return readString(COLLAPSED_KEY) === '1';
 }
 
 /**
@@ -55,9 +52,7 @@ export default function Sidebar() {
   function toggleCollapsed() {
     setUserCollapsed((c) => {
       const next = !c;
-      try {
-        localStorage.setItem(COLLAPSED_KEY, next ? '1' : '0');
-      } catch { /* ignore */ }
+      writeString(COLLAPSED_KEY, next ? '1' : '0');
       return next;
     });
   }

@@ -4,6 +4,7 @@ const assetsModel = require('../services/assets.model');
 const projectsModel = require('../services/projects.model');
 const layersModel = require('../services/layers.model');
 const aiProxy = require('../services/aiProxy.service');
+const logger = require('../services/logger.service');
 
 async function uploadAsset(req, res, next) {
   try {
@@ -68,8 +69,19 @@ async function requestCleanup(req, res, next) {
     const updated = await assetsModel.updateAssetStatus(asset.id, { status: 'cleaned', cleanedPath });
     res.json(updated);
   } catch (err) {
+    // Recording the failed status must never replace the error the caller
+    // actually needs: if this write fails too, log it and still propagate
+    // the original provider/storage error.
     if (req.params.assetId) {
-      await assetsModel.updateAssetStatus(req.params.assetId, { status: 'failed', errorMessage: err.message });
+      try {
+        await assetsModel.updateAssetStatus(req.params.assetId, { status: 'failed', errorMessage: err.message });
+      } catch (statusErr) {
+        logger.error({
+          message: `Failed to mark asset as failed after cleanup error: ${statusErr.message}`,
+          assetId: req.params.assetId,
+          originalError: err.message,
+        });
+      }
     }
     next(err);
   }
@@ -107,12 +119,22 @@ async function deleteAsset(req, res, next) {
       await projectsModel.updateProject(project.id, { coverAssetId: remaining[0]?.id || null });
     }
 
-    storage.deleteFile(asset.original_path);
-    if (asset.cleaned_path) storage.deleteFile(asset.cleaned_path);
-    for (const layer of layers) {
-      if (layer.mask_path) storage.deleteFile(layer.mask_path);
+    // The row is already gone, so a failed unlink can't be rolled back and
+    // must not turn a successful delete into a 500 the client would retry.
+    // Leftover files are logged (and the `reconcile` script cleans them up)
+    // rather than silently ignored.
+    const orphaned = [asset.original_path, asset.cleaned_path, ...layers.map((l) => l.mask_path)]
+      .filter(Boolean)
+      .filter((relativePath) => storage.tryDeleteFile(relativePath));
+    storage.tryDeleteDirIfEmpty(asset.id);
+
+    if (orphaned.length > 0) {
+      logger.warn({
+        message: `Asset row deleted but ${orphaned.length} file(s) could not be removed`,
+        assetId: asset.id,
+        paths: orphaned,
+      });
     }
-    storage.deleteDirIfEmpty(asset.id);
 
     res.status(204).end();
   } catch (err) { next(err); }

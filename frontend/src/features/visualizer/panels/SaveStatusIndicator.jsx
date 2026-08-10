@@ -15,15 +15,18 @@ export default function SaveStatusIndicator() {
   const [label, setLabel] = useState('Saved');
 
   useEffect(() => {
-    if (hasError) setLabel('Unsaved changes — retrying');
+    // Nothing retries a failed mutation here, so don't claim it does — the
+    // error toast names the operation; this pill just keeps the failure
+    // visible in the header until a later save succeeds.
+    if (hasError) setLabel('Some changes did not save');
     else if (isMutating || isFetching) setLabel('Saving…');
     else setLabel('Saved');
   }, [isMutating, isFetching, hasError]);
 
   const dotColor =
-    label === 'Saved' ? 'bg-[var(--success)]' : label.startsWith('Unsaved') ? 'bg-[var(--danger)]' : 'bg-[var(--warning)]';
+    label === 'Saved' ? 'bg-[var(--success)]' : label.startsWith('Some changes') ? 'bg-[var(--danger)]' : 'bg-[var(--warning)]';
   const textColor =
-    label === 'Saved' ? 'text-[var(--success)]' : label.startsWith('Unsaved') ? 'text-[var(--danger)]' : 'text-[var(--graphite)]';
+    label === 'Saved' ? 'text-[var(--success)]' : label.startsWith('Some changes') ? 'text-[var(--danger)]' : 'text-[var(--graphite)]';
 
   return (
     <div

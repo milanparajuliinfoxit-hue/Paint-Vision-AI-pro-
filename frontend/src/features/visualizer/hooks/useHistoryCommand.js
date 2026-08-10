@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useUpdateLayer, useDeleteLayer, useRestoreLayer } from './useLayers';
 import { useAppendHistory, useHistoryList } from './useHistoryEntries';
 import { useVisualizerStore } from '../store/visualizerStore';
+import { reportError } from '../../../shared/lib/errorReporter';
 
 // Command pattern (requirements doc, Section 5.3): each entry stores enough
 // to invert the action rather than a full-state snapshot. Undo/redo is
@@ -134,45 +135,73 @@ export function useHistoryCommand(projectId, assetId) {
   // Undo lands on a command's "before" state; redo lands on its "after"
   // state — the same replay, just in the opposite direction, dispatched by
   // command type rather than assumed to always be a field patch.
+  // Awaits the server write rather than firing it and assuming success: the
+  // undo pointer must only move once the mutation it describes has actually
+  // landed, otherwise a rejected request left the pointer (and the History
+  // tab) claiming a state the server never reached, with nothing on screen.
   function applyCommand(command, target) {
     switch (command.type) {
       case 'patch':
-        return updateLayer.mutate({ layerId: command.layerId, patch: command[target] });
+        return updateLayer.mutateAsync({ layerId: command.layerId, patch: command[target] });
       case 'create':
-        return target === 'before' ? removeLayer.mutate(command.layerId) : restoreLayer.mutate(command.layerId);
+        return target === 'before' ? removeLayer.mutateAsync(command.layerId) : restoreLayer.mutateAsync(command.layerId);
       case 'delete':
-        return target === 'before' ? restoreLayer.mutate(command.layerId) : removeLayer.mutate(command.layerId);
+        return target === 'before' ? restoreLayer.mutateAsync(command.layerId) : removeLayer.mutateAsync(command.layerId);
       case 'bulk-delete':
-        return command.layerIds.forEach((id) =>
-          target === 'before' ? restoreLayer.mutate(id) : removeLayer.mutate(id)
+        return Promise.all(
+          command.layerIds.map((id) =>
+            target === 'before' ? restoreLayer.mutateAsync(id) : removeLayer.mutateAsync(id)
+          )
         );
       default:
-        return null;
+        return Promise.resolve(null);
     }
   }
 
-  function undo() {
+  async function undo() {
     if (undoPointer < 0) return;
-    applyCommand(undoStack[undoPointer], 'before');
-    moveUndoPointer(-1);
+    try {
+      await applyCommand(undoStack[undoPointer], 'before');
+      moveUndoPointer(-1);
+    } catch (err) {
+      reportError(err, { action: 'Undo' });
+    }
   }
 
-  function redo() {
+  async function redo() {
     if (undoPointer >= undoStack.length - 1) return;
-    applyCommand(undoStack[undoPointer + 1], 'after');
-    moveUndoPointer(1);
+    try {
+      await applyCommand(undoStack[undoPointer + 1], 'after');
+      moveUndoPointer(1);
+    } catch (err) {
+      reportError(err, { action: 'Redo' });
+    }
   }
 
   // Scrubbing the History tab: replay every command between the current
   // pointer and the clicked entry, in order, landing exactly on that point.
-  function jumpTo(targetIndex) {
+  // A step that fails stops the replay and leaves the pointer on the last
+  // step that did apply, so the History tab keeps matching the server.
+  async function jumpTo(targetIndex) {
     if (targetIndex === undoPointer) return;
-    if (targetIndex > undoPointer) {
-      for (let i = undoPointer + 1; i <= targetIndex; i++) applyCommand(undoStack[i], 'after');
-    } else {
-      for (let i = undoPointer; i > targetIndex; i--) applyCommand(undoStack[i], 'before');
+    let reached = undoPointer;
+    try {
+      if (targetIndex > undoPointer) {
+        for (let i = undoPointer + 1; i <= targetIndex; i++) {
+          await applyCommand(undoStack[i], 'after');
+          reached = i;
+        }
+      } else {
+        for (let i = undoPointer; i > targetIndex; i--) {
+          await applyCommand(undoStack[i], 'before');
+          reached = i - 1;
+        }
+      }
+    } catch (err) {
+      reportError(err, { action: 'Jumping to history entry' });
+    } finally {
+      useVisualizerStore.setState({ undoPointer: reached });
     }
-    useVisualizerStore.setState({ undoPointer: targetIndex });
   }
 
   return {

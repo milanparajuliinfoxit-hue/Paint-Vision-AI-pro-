@@ -2,23 +2,60 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 const API_KEY = import.meta.env.VITE_API_ACCESS_KEY || '';
 
 async function request(path, options = {}) {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(API_KEY ? { 'x-api-key': API_KEY } : {}),
-      ...options.headers,
-    },
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    const err = new Error(body.error || `Request failed: ${res.status}`);
-    err.status = res.status;
+  const url = `${BASE_URL}${path}`;
+  let res;
+  try {
+    res = await fetch(url, {
+      ...options,
+      headers: {
+        ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+        ...(API_KEY ? { 'x-api-key': API_KEY } : {}),
+        ...options.headers,
+      },
+    });
+  } catch (cause) {
+    // fetch only rejects for transport failures, and the browser's message
+    // ("Failed to fetch") says nothing about which server is unreachable.
+    const err = new Error(`Cannot reach the server at ${BASE_URL}. Check that the backend is running.`);
+    err.isNetworkError = true;
+    err.cause = cause;
     throw err;
   }
+
+  if (!res.ok) throw await toHttpError(res);
+
   if (res.status === 204) return null;
   const contentType = res.headers.get('content-type') || '';
-  return contentType.includes('application/json') ? res.json() : res.blob();
+  if (!contentType.includes('application/json')) return res.blob();
+
+  try {
+    return await res.json();
+  } catch (cause) {
+    // A 200 whose body isn't the JSON it claims to be (truncated response,
+    // a proxy's HTML error page) is a real failure — don't hand callers
+    // `undefined` and let it surface as a confusing render error later.
+    const err = new Error(`Malformed JSON response from ${path}`);
+    err.status = res.status;
+    err.cause = cause;
+    throw err;
+  }
+}
+
+// Error responses aren't always the JSON envelope the API promises — a proxy
+// timeout or a crash upstream returns HTML/plain text. Reading as text first
+// keeps that detail in the message instead of collapsing every one of them
+// into a bare status code.
+async function toHttpError(res) {
+  const raw = await res.text().catch(() => '');
+  let message = '';
+  try {
+    message = JSON.parse(raw).error || '';
+  } catch {
+    message = raw.trim().slice(0, 200);
+  }
+  const err = new Error(message || `Request failed: ${res.status} ${res.statusText}`.trim());
+  err.status = res.status;
+  return err;
 }
 
 function toForm(fields = {}, fileEntries = {}) {

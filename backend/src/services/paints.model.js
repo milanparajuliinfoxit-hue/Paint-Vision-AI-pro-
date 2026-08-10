@@ -30,29 +30,33 @@ async function list({ search = '', productLine = null, page = 1, pageSize = 25 }
   return { rows, total, page: Number(page), pageSize: Number(pageSize) };
 }
 
-async function getById(id) {
-  const [rows] = await pool.query(
+// Write helpers take an optional connection so a caller running inside a
+// transaction (the Excel import) can execute on that connection instead of
+// grabbing a separate pooled one — otherwise its rollback would silently
+// leave every row already written by these helpers committed.
+async function getById(id, db = pool) {
+  const [rows] = await db.query(
     'SELECT * FROM paints WHERE id = ? AND is_deleted = 0',
     [id]
   );
   return rows[0] || null;
 }
 
-async function create(data) {
+async function create(data, db = pool) {
   const cols = [
     's_id', 'color_code', 'color_name',
     ...PRODUCT_LINE_FIELDS,
     'r_value', 'g_value', 'b_value',
   ];
   const values = cols.map((c) => toColumnValue(data, c));
-  const [result] = await pool.query(
+  const [result] = await db.query(
     `INSERT INTO paints (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
     values
   );
-  return getById(result.insertId);
+  return getById(result.insertId, db);
 }
 
-async function update(id, data) {
+async function update(id, data, db = pool) {
   const cols = [
     'color_code', 'color_name',
     ...PRODUCT_LINE_FIELDS,
@@ -60,8 +64,8 @@ async function update(id, data) {
   ];
   const setClause = cols.map((c) => `${c} = ?`).join(', ');
   const values = cols.map((c) => toColumnValue(data, c));
-  await pool.query(`UPDATE paints SET ${setClause} WHERE id = ?`, [...values, id]);
-  return getById(id);
+  await db.query(`UPDATE paints SET ${setClause} WHERE id = ?`, [...values, id]);
+  return getById(id, db);
 }
 
 async function softDelete(id) {
