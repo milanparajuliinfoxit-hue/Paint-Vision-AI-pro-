@@ -135,13 +135,23 @@ CREATE TABLE IF NOT EXISTS layers (
 ) ENGINE=InnoDB;
 
 -- Append-only undo/redo log, persisted per project so history survives a
--- refresh instead of dying as an in-memory stack.
+-- refresh instead of dying as an in-memory stack. Rows are NEVER deleted or
+-- rewritten (see mask-file-immutability's sibling rule for this log) — a
+-- row that becomes an abandoned redo branch (the user undid it, then made a
+-- different edit instead of redoing it) is marked via superseded_at rather
+-- than removed, so the full audit trail always stays intact on disk/DB.
+-- superseded_at IS NULL means "still a candidate for redo/hydration replay";
+-- non-NULL means "abandoned branch — excluded from the reconstructed undo
+-- stack, but still a real, queryable row." Existing rows default to NULL
+-- (active), which exactly preserves pre-existing behavior for history
+-- written before this column existed.
 CREATE TABLE IF NOT EXISTS history_entries (
     id              INT AUTO_INCREMENT PRIMARY KEY,
     project_id      INT NOT NULL,
     action          VARCHAR(50) NOT NULL,
     before_state    JSON NULL,
     after_state     JSON NULL,
+    superseded_at   TIMESTAMP(3) NULL,
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_history_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;

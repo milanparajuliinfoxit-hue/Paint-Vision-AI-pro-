@@ -5,6 +5,8 @@ import { useToolInteraction } from '../tools/useToolInteraction';
 import { useVisualizerStore } from '../store/visualizerStore';
 import { Button } from '../../../shared/ui/button';
 import { assets } from '../../../shared/lib/api';
+import { useWallDetection } from '../hooks/useWallDetection';
+import WallRefineBar from '../panels/WallRefineBar';
 
 export default function CanvasStage({
   baseImage,
@@ -23,6 +25,7 @@ export default function CanvasStage({
   onSurfacePick,
   localMaskOverrides,
   pendingNewLayer,
+  activeAssetId,
 }) {
   const containerRef = useRef(null);
   const stageRef = useRef(null);
@@ -41,7 +44,22 @@ export default function CanvasStage({
   const imageVisible = useVisualizerStore((s) => s.imageVisible);
   const fitSignal = useVisualizerStore((s) => s.fitSignal);
 
-  const tool = useToolInteraction({ width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha, surfaceMasks, onSurfacePick, houseAlpha });
+  const aiWallActiveMask = useVisualizerStore((s) => s.aiWallActiveMask);
+  const aiWallIsSegmenting = useVisualizerStore((s) => s.aiWallIsSegmenting);
+  const aiWallRefineMode = useVisualizerStore((s) => s.aiWallRefineMode);
+  const clearAiWallPoints = useVisualizerStore((s) => s.clearAiWallPoints);
+
+  const { segmentWall } = useWallDetection(activeAssetId);
+
+  const handleAiWallClick = async (pt, { isSubtract }) => {
+    const mode = isSubtract ? 'remove' : aiWallRefineMode;
+    await segmentWall({ x: pt.x, y: pt.y, mode, existingMaskCanvas: aiWallActiveMask });
+  };
+
+  const tool = useToolInteraction({
+    width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha, surfaceMasks, onSurfacePick, houseAlpha,
+    onAiWallClick: handleAiWallClick,
+  });
 
   useEffect(() => {
     if (!containerRef.current) return undefined;
@@ -271,6 +289,27 @@ export default function CanvasStage({
             {activeTool === 'brush' && surfaceAware && tool.isDrawing && tool.previewCanvas && (
               <KonvaImage image={tool.previewCanvas} width={width} height={height} listening={false} opacity={0.92} />
             )}
+            {/* AI Wall Detection Active Mask Overlay & Target Indicator */}
+            {aiWallActiveMask && (
+              <KonvaImage
+                image={aiWallActiveMask}
+                width={width}
+                height={height}
+                listening={false}
+                opacity={0.45}
+              />
+            )}
+            {activeTool === 'ai-wall' && hoverPos && !draggableStage && (
+              <Circle
+                x={hoverPos.x}
+                y={hoverPos.y}
+                radius={12 / viewport.scale}
+                stroke="#3b82f6"
+                fill="rgba(59, 130, 246, 0.25)"
+                strokeWidth={2 / viewport.scale}
+                listening={false}
+              />
+            )}
             {showBrushCursor && (
               <Circle
                 x={hoverPos.x}
@@ -284,6 +323,18 @@ export default function CanvasStage({
           </Layer>
         </Stage>
       )}
+
+      {/* Floating Refine Bar for AI Wall Detection */}
+      <WallRefineBar
+        onClear={clearAiWallPoints}
+        onApplyLayer={() => {
+          if (aiWallActiveMask) {
+            aiWallActiveMask.toBlob((blob) => {
+              onCommitMask(aiWallActiveMask, 'ai-wall', { finish: useVisualizerStore.getState().aiWallFinish });
+            });
+          }
+        }}
+      />
 
       <div className="absolute bottom-3 right-3 flex items-center gap-2 rounded-full border border-white/10 bg-[var(--ink)]/80 px-3 py-1.5 backdrop-blur">
         <Button size="sm" variant="ghost" className="text-white/85" onClick={fitToScreen}>Fit</Button>

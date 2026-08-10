@@ -1,4 +1,4 @@
-import { applyPaintColor } from '../../../shared/lib/colorEngine';
+import { applyPaintColor, PAINT_STRENGTH, PAINT_LIGHTNESS_BLEND } from '../../../shared/lib/colorEngine';
 import { assets as assetsApi } from '../../../shared/lib/api';
 import { loadMaskImageData } from '../../../shared/lib/maskImage';
 import { MAX_PREVIEW_DIM, computePreviewSize, createBoundedCache } from './schemePreviewCore';
@@ -24,8 +24,8 @@ import { MAX_PREVIEW_DIM, computePreviewSize, createBoundedCache } from './schem
 // layer canvas carries alpha=0 outside its mask, so surfaces stack on top of
 // each other exactly like the stage.
 
-const PAINTED_STRENGTH = 0.95;
-const PAINTED_LIGHTNESS_BLEND = 0.45;
+const PAINTED_STRENGTH = PAINT_STRENGTH;
+const PAINTED_LIGHTNESS_BLEND = PAINT_LIGHTNESS_BLEND;
 
 // Decoded masks at preview resolution, shared across every scheme in a run so
 // the same surface PNG (roof, front-wall, …) is fetched/decoded once per

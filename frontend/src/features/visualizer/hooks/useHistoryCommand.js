@@ -4,6 +4,7 @@ import { useAppendHistory, useHistoryList } from './useHistoryEntries';
 import { useProject, useSetUndoPointer } from '../../projects/useProjects';
 import { useVisualizerStore } from '../store/visualizerStore';
 import { debounce } from '../../../shared/lib/debounce';
+import { logger } from '../../../shared/lib/logger';
 
 // Command pattern (requirements doc, Section 5.3): each entry stores enough
 // to invert the action rather than a full-state snapshot. Undo/redo is
@@ -67,12 +68,18 @@ export function useHistoryCommand(projectId, assetId) {
     hydrated.current = true;
     hydrateHistory(
       historyEntries
-        .filter((e) => ACTION_TYPE[e.action]) // unrecognized/legacy log-only entries don't participate in undo
+        // unrecognized/legacy log-only entries don't participate in undo;
+        // superseded ones are an abandoned redo branch (the user undid past
+        // them, then made a different edit) — excluded so a reload can't
+        // resurrect them via redo. Their rows/mask files are untouched on
+        // disk/DB, just left out of the reconstructed stack. See
+        // LAYER_MASK_HISTORY_AUDIT.md §G.1.
+        .filter((e) => ACTION_TYPE[e.action] && !e.superseded_at)
         .map((e) => {
           const type = ACTION_TYPE[e.action];
           if (type === 'bulk-delete') {
             const layerIds = e.before_state?.layerIds || e.after_state?.layerIds || [];
-            return { type, action: e.action, layerIds };
+            return { type, action: e.action, layerIds, historyEntryId: e.id };
           }
           const layerId = e.after_state?.layerId ?? e.before_state?.layerId;
           return {
@@ -81,6 +88,7 @@ export function useHistoryCommand(projectId, assetId) {
             layerId,
             before: type === 'patch' ? stripLayerId(e.before_state) : null,
             after: type === 'patch' ? stripLayerId(e.after_state) : null,
+            historyEntryId: e.id,
           };
         }),
       project.undo_pointer
@@ -99,17 +107,41 @@ export function useHistoryCommand(projectId, assetId) {
     persistPointer(undoPointer);
   }, [undoPointer, project, persistPointer]);
 
+  // Every history-log append funnels through here so the abandoned-redo-tail
+  // supersede marking (LAYER_MASK_HISTORY_AUDIT.md §G.1/I) happens exactly
+  // once, in the same request that appends the new entry (history.model.js's
+  // appendEntry does both in one transaction). `undoStack`/`undoPointer` are
+  // read fresh from the closure — same assumption undo()/redo()/jumpTo()
+  // already make. A failed append is logged, not thrown: local undo/redo
+  // already works purely off updateLayer/removeLayer/restoreLayer calls, not
+  // the history log itself, so a transient append failure shouldn't block
+  // the local command from landing — only cross-reload replay of *this*
+  // command would be affected, same fault tolerance this had before
+  // (appendHistory was already fire-and-forget).
+  async function appendAndPush(entryPayload, command) {
+    const supersedeIds = undoStack
+      .slice(undoPointer + 1)
+      .map((c) => c.historyEntryId)
+      .filter((id) => Number.isInteger(id));
+    let historyEntryId = null;
+    try {
+      const entry = await appendHistory.mutateAsync({ ...entryPayload, supersedeIds });
+      historyEntryId = entry.id;
+    } catch (err) {
+      logger.error('history.append.failed', { action: entryPayload.action, message: err?.message });
+    }
+    pushCommand({ ...command, historyEntryId });
+  }
+
   // Records a patch-type command in both the persisted history log and the
   // local undo stack, without performing any mutation itself — `commit`
   // and `commitMaskEdit` each apply the mutation their own way first, then
   // both funnel through here so undo/redo/jumpTo see one consistent shape.
   function recordPatch({ action, layerId, before, after }) {
-    appendHistory.mutate({
-      action,
-      beforeState: { layerId, ...before },
-      afterState: { layerId, ...after },
-    });
-    pushCommand({ type: 'patch', action, layerId, before, after });
+    return appendAndPush(
+      { action, beforeState: { layerId, ...before }, afterState: { layerId, ...after } },
+      { type: 'patch', action, layerId, before, after }
+    );
   }
 
   // Plain field patch on a layer that already exists (color, opacity,
@@ -122,26 +154,35 @@ export function useHistoryCommand(projectId, assetId) {
   // A brush stroke re-uploads the mask as a brand-new file (storage never
   // overwrites), so the *old* mask_path is still a valid file on disk —
   // undoing a mask edit is just pointing mask_path back at it, no re-upload
-  // needed. Used by both the brush's mask-edit mode and the eraser.
+  // needed. Used by both the brush's mask-edit mode and the eraser. Awaits
+  // recordPatch (unlike `commit`) so that by the time this resolves, the
+  // supersede-marking for this stroke's own abandoned tail (if any) has
+  // definitely landed before the next stroke can compute *its* supersede set.
   async function commitMaskEdit({ action, layerId, maskBlob, beforeMaskPath }) {
     const updated = await updateLayer.mutateAsync({ layerId, patch: {}, maskBlob });
-    recordPatch({ action, layerId, before: { maskPath: beforeMaskPath || null }, after: { maskPath: updated.mask_path } });
+    await recordPatch({ action, layerId, before: { maskPath: beforeMaskPath || null }, after: { maskPath: updated.mask_path } });
   }
 
   // A tool just produced a brand-new layer (rect/lasso/polygon/magic-wand/
-  // brush-new-surface). The layer already exists server-side by the time
-  // this is called — this only makes that creation undoable.
+  // brush-new-surface, or an applied AI scheme/surface — useApplySurface.js
+  // and useConcepts.js call this with createdVia:'ai-surface'). The layer
+  // already exists server-side by the time this is called — this only makes
+  // that creation undoable.
   function commitCreate({ layerId, createdVia }) {
-    appendHistory.mutate({ action: 'mask-created', beforeState: null, afterState: { layerId, createdVia } });
-    pushCommand({ type: 'create', action: 'mask-created', layerId });
+    return appendAndPush(
+      { action: 'mask-created', beforeState: null, afterState: { layerId, createdVia } },
+      { type: 'create', action: 'mask-created', layerId }
+    );
   }
 
   // Single-layer delete (the ✕ button in the Layers panel).
   function commitDelete(layer) {
     removeLayer.mutate(layer.id);
     if (activeLayerId === layer.id) setActiveLayerId(null);
-    appendHistory.mutate({ action: 'layer-deleted', beforeState: { layerId: layer.id }, afterState: null });
-    pushCommand({ type: 'delete', action: 'layer-deleted', layerId: layer.id });
+    return appendAndPush(
+      { action: 'layer-deleted', beforeState: { layerId: layer.id }, afterState: null },
+      { type: 'delete', action: 'layer-deleted', layerId: layer.id }
+    );
   }
 
   // "Clear all paint" — removes every layer on the current asset as one
@@ -150,8 +191,10 @@ export function useHistoryCommand(projectId, assetId) {
     if (layerIds.length === 0) return;
     layerIds.forEach((id) => removeLayer.mutate(id));
     if (layerIds.includes(activeLayerId)) setActiveLayerId(null);
-    appendHistory.mutate({ action: 'paint-cleared', beforeState: { layerIds }, afterState: null });
-    pushCommand({ type: 'bulk-delete', action: 'paint-cleared', layerIds });
+    return appendAndPush(
+      { action: 'paint-cleared', beforeState: { layerIds }, afterState: null },
+      { type: 'bulk-delete', action: 'paint-cleared', layerIds }
+    );
   }
 
   // Undo lands on a command's "before" state; redo lands on its "after"

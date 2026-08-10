@@ -90,6 +90,20 @@ export function labDistance(a, b) {
   return Math.sqrt((a.l - b.l) ** 2 + (a.a - b.a) ** 2 + (a.b - b.b) ** 2);
 }
 
+// Shared "applied paint" tuning — used by every renderer that paints a real
+// (non-preview) color: LayerNode (the live canvas), ExportPanel, and
+// renderSchemePreview. Kept in one place because these three must always
+// stay in sync (each has a comment saying so) — before this constant existed
+// the same two numbers were hand-copied into all three call sites, which is
+// exactly the kind of drift that lets one of them silently fall behind a
+// tuning fix. PAINT_LIGHTNESS_BLEND is high (most of each pixel's shading
+// offset removed) because a real coat of paint reads as opaque, not as a
+// tinted photo — the previous 0.45 preserved so much of the source photo's
+// own shadow/highlight range that painted walls looked washed-out/faded
+// rather than painted.
+export const PAINT_STRENGTH = 0.98;
+export const PAINT_LIGHTNESS_BLEND = 0.8;
+
 /**
  * Recolors the pixels of `imageData` where `maskData` alpha > threshold,
  * blending toward targetRgb while preserving each pixel's own lightness.
@@ -116,16 +130,18 @@ export function labDistance(a, b) {
  * @returns {ImageData} new ImageData with the recolor applied
  */
 export function applyPaintColor(imageData, maskData, targetRgb, strength = 0.85, opts = {}) {
-  const { transparentOutsideMask = false, lightnessBlend = 0 } = opts;
+  const { transparentOutsideMask = false, lightnessBlend = 0, finish = 'satin' } = opts;
   const { width, height, data } = imageData;
   const out = new ImageData(width, height);
   out.data.set(data);
 
   const targetLab = rgbToLab(targetRgb.r, targetRgb.g, targetRgb.b);
 
-  // Mean lightness of the masked region, computed on a sampled grid (every
-  // 3rd pixel) so the extra pass stays cheap. Used only when the paint is
-  // allowed to change the region's overall lightness.
+  // Specular intensity factor based on finish selection
+  const finishShineMap = { matte: 0.0, eggshell: 0.04, satin: 0.09, gloss: 0.18 };
+  const specularShine = finishShineMap[finish] || 0.09;
+
+  // Mean lightness of the masked region
   let meanL = null;
   if (lightnessBlend > 0) {
     let sum = 0, count = 0;
@@ -152,18 +168,19 @@ export function applyPaintColor(imageData, maskData, targetRgb, strength = 0.85,
     const r = data[i], g = data[i + 1], b = data[i + 2];
     const srcLab = rgbToLab(r, g, b);
 
-    // Keep the source's own lightness relationship (shadows/highlights/
-    // texture), optionally re-anchored onto the paint's lightness; pull the
-    // color channels toward the target, scaled by mask strength * strength.
     const blend = maskAlpha * strength;
     let l = srcLab.l;
     if (lightnessBlend > 0 && meanL != null) {
-      // Fully-painted pixel = target lightness + the pixel's shading offset
-      // from the wall mean (scaled by how much shading to preserve), then
-      // eased in by the feather/blend so edges still wash in naturally.
       const painted = targetLab.l + (srcLab.l - meanL) * (1 - lightnessBlend);
       l = srcLab.l + (painted - srcLab.l) * blend;
     }
+
+    // Add specular highlight boost for gloss/satin finishes on highlight areas (L > 75)
+    if (specularShine > 0 && srcLab.l > 75) {
+      const highlightFactor = Math.pow((srcLab.l - 75) / 25, 2);
+      l = Math.min(100, l + highlightFactor * specularShine * 15 * blend);
+    }
+
     const newLab = {
       l,
       a: srcLab.a + (targetLab.a - srcLab.a) * blend,

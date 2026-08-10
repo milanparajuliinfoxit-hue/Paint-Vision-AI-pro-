@@ -9,13 +9,23 @@
  *
  * Capabilities:
  *   'house-understanding'  -> structured house/surface/object understanding.
- *                             No production provider is registered right now
- *                             — the local Grounding DINO + SAM2 service was
- *                             removed (no remote replacement has been
- *                             verified to work yet; see .env's comment on
- *                             AI_ANALYSIS_ENABLED). houseUnderstanding
- *                             .service.js's disabled-capability check stops
- *                             requests before they'd ever reach here.
+ *                             Two interchangeable providers are registered
+ *                             (see AI_HOSTED_ARCHITECTURE.md §9 for the full
+ *                             comparison/decision writeup):
+ *                               - `replicate-vision` — Grounding DINO + SAM2
+ *                                 on Replicate. Blocked as of this writing on
+ *                                 the Replicate account's billing (402).
+ *                               - `fal-vision` — SAM 3 on fal.ai, single
+ *                                 model/call-per-class. Current default while
+ *                                 Replicate billing is unresolved.
+ *                             Only one is active at a time, via
+ *                             AI_ANALYSIS_PROVIDER + its own *_API_KEY/TOKEN
+ *                             in .env; until both are set,
+ *                             houseUnderstanding.service.js's
+ *                             disabled-capability check stops requests
+ *                             before they'd ever reach here. Both stand in
+ *                             for the local Grounding DINO + SAM2 service
+ *                             removed outright (not disabled) earlier.
  *   'paint-recommendation' -> catalog-only paint scheme generation, or a
  *                             real hosted-LLM scheme generator (hf-scheme).
  *
@@ -28,8 +38,10 @@ const aiConfig = require('../../config/aiConfig');
 const aiResult = require('./aiResult');
 const catalogRecommendationProvider = require('./providers/catalogRecommendationProvider');
 const hfSchemeProvider = require('./providers/hfSchemeProvider');
+const replicateVisionProvider = require('./providers/replicateVisionProvider');
+const falVisionProvider = require('./providers/falVisionProvider');
 
-const PROVIDERS = [catalogRecommendationProvider, hfSchemeProvider];
+const PROVIDERS = [catalogRecommendationProvider, hfSchemeProvider, replicateVisionProvider, falVisionProvider];
 
 function getProviderFor(capability) {
   const configured = aiConfig.getProviderFor(capability);

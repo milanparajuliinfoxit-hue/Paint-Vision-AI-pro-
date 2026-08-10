@@ -17,10 +17,19 @@ function ok(output, meta = {}) {
     modelVersion: meta.modelVersion ?? null,
     provider: meta.provider ?? 'unknown',
     failureReason: null,
+    stage: meta.stage ?? 'completed',
   };
 }
 
+// `stage`/`retryable` (governing brief §17/§18): which pipeline stage
+// actually failed and whether a caller could reasonably retry as-is (a
+// timeout/429/503 vs. a missing token or invalid image never will).
+// Optional, additive — a provider that never sets err.stage/err.retriable
+// (mockProvider, catalogRecommendationProvider, hfSchemeProvider) just gets
+// the same `stage: null, retryable: false` defaults as before this field
+// existed.
 function fail(failureReason, meta = {}) {
+  const err = failureReason instanceof Error ? failureReason : null;
   return {
     ok: false,
     output: null,
@@ -28,7 +37,9 @@ function fail(failureReason, meta = {}) {
     processingTimeMs: meta.processingTimeMs ?? 0,
     modelVersion: meta.modelVersion ?? null,
     provider: meta.provider ?? 'unknown',
-    failureReason: failureReason instanceof Error ? failureReason.message : String(failureReason),
+    failureReason: err ? err.message : String(failureReason),
+    stage: meta.stage ?? err?.stage ?? null,
+    retryable: meta.retryable ?? err?.retriable ?? false,
   };
 }
 

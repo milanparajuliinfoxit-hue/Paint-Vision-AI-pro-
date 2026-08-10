@@ -640,6 +640,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
             onSurfacePick={handleSurfacePick}
             localMaskOverrides={localMaskOverrides}
             pendingNewLayer={pendingNewLayer}
+            activeAssetId={activeAssetId}
           />
         </div>
 

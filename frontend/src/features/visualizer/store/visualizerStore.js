@@ -23,7 +23,14 @@ export const useVisualizerStore = create((set, get) => ({
   // it carries an ai_surface_key), brush strokes are additionally clipped to
   // the detected surface mask, so paint physically cannot escape the surface
   // the AI identified. Defaults on; off for freehand refinement.
-  aiSurfaceLock: true,
+  // AI Wall Detection & Finish Simulator State
+  aiWallFinish: 'satin', // 'matte' | 'eggshell' | 'satin' | 'gloss'
+  aiWallRefineMode: 'add', // 'add' | 'remove' | 'brush'
+  aiWallPositivePoints: [],
+  aiWallNegativePoints: [],
+  aiWallActiveMask: null,
+  aiWallHoverPoint: null,
+  aiWallIsSegmenting: false,
 
   viewport: { scale: 1, x: 0, y: 0 },
 
@@ -93,8 +100,19 @@ export const useVisualizerStore = create((set, get) => ({
   setCompareMode: (mode) => set({ compareMode: mode }),
   setCompareState: (state) => set({ compareState: state }),
   setImageLocked: (locked) => set({ imageLocked: locked }),
-  setImageVisible: (visible) => set({ imageVisible: visible }),
   requestFit: () => set((s) => ({ fitSignal: s.fitSignal + 1 })),
+
+  setAiWallFinish: (finish) => set({ aiWallFinish: finish }),
+  setAiWallRefineMode: (mode) => set({ aiWallRefineMode: mode }),
+  setAiWallActiveMask: (mask) => set({ aiWallActiveMask: mask }),
+  setAiWallHoverPoint: (pt) => set({ aiWallHoverPoint: pt }),
+  setAiWallIsSegmenting: (isSeg) => set({ aiWallIsSegmenting: isSeg }),
+  addAiWallPoint: (pt, isPositive = true) =>
+    set((state) => ({
+      aiWallPositivePoints: isPositive ? [...state.aiWallPositivePoints, pt] : state.aiWallPositivePoints,
+      aiWallNegativePoints: !isPositive ? [...state.aiWallNegativePoints, pt] : state.aiWallNegativePoints,
+    })),
+  clearAiWallPoints: () => set({ aiWallPositivePoints: [], aiWallNegativePoints: [], aiWallActiveMask: null }),
 
   // Seed the stack from persisted history on load. `pointer` is the
   // project's persisted undo_pointer — the log itself is append-only and

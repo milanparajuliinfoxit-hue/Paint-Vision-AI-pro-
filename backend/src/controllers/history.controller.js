@@ -8,10 +8,10 @@ async function append(req, res, next) {
     const project = await projectsModel.getProject(req.params.projectId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    const { action, beforeState, afterState } = req.body;
+    const { action, beforeState, afterState, supersedeIds } = req.body;
     if (!action) return res.status(400).json({ error: 'action is required' });
 
-    const entry = await historyModel.appendEntry({ projectId: project.id, action, beforeState, afterState });
+    const entry = await historyModel.appendEntry({ projectId: project.id, action, beforeState, afterState, supersedeIds });
     res.status(201).json(entry);
   } catch (err) { next(err); }
 }

@@ -33,6 +33,7 @@ async function main() {
     "ALTER TABLE layers ADD COLUMN ai_analysis_id INT NULL AFTER ai_surface_key",
     "ALTER TABLE layers ADD COLUMN ai_scheme_id INT NULL AFTER ai_analysis_id",
     "ALTER TABLE ai_jobs ADD COLUMN running_claim VARCHAR(30) GENERATED ALWAYS AS (CASE WHEN status = 'running' THEN job_type ELSE NULL END) STORED",
+    "ALTER TABLE history_entries ADD COLUMN superseded_at TIMESTAMP(3) NULL",
   ];
   for (const stmt of upgradeColumns) {
     try {

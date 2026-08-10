@@ -17,4 +17,7 @@ router.get('/recommendations', ctrl.listRecommendations);
 router.post('/process', ctrl.processAsset);
 router.get('/status', ctrl.getPipelineStatus);
 
+// Promptable wall detection (Phase 3): point-click segmentation & refinement
+router.post('/segment-wall', ctrl.segmentWall);
+
 module.exports = router;

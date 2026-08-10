@@ -11,9 +11,47 @@ const houseUnderstanding = require('../services/ai/houseUnderstanding.service');
 const paintRecommendation = require('../services/ai/paintRecommendation.service');
 const aiPipeline = require('../services/ai/aiPipeline.service');
 
+const wallSegmentation = require('../services/ai/wallSegmentation.service');
+
 async function analyzeAsset(req, res, next) {
   try {
     res.json(await houseUnderstanding.analyzeAsset(req.params.assetId));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function segmentWall(req, res, next) {
+  try {
+    const { x, y, positivePoints, negativePoints, mode, tolerance } = req.body || {};
+    if (x === undefined || y === undefined) {
+      return res.status(400).json({ error: 'Click coordinates (x, y) are required.' });
+    }
+    const result = await wallSegmentation.segmentWallAtPoint({
+      assetId: req.params.assetId,
+      x: Number(x),
+      y: Number(y),
+      positivePoints: Array.isArray(positivePoints) ? positivePoints : [],
+      negativePoints: Array.isArray(negativePoints) ? negativePoints : [],
+      mode: mode || 'new',
+      tolerance: tolerance !== undefined ? Number(tolerance) : undefined,
+    });
+
+    // Convert Uint8Array alpha mask to base64 or array format for JSON delivery
+    const maskBase64 = Buffer.from(result.alpha).toString('base64');
+
+    res.json({
+      ok: result.ok,
+      width: result.width,
+      height: result.height,
+      alphaBase64: maskBase64,
+      pixelCount: result.pixelCount,
+      confidence: result.confidence,
+      boundingBox: result.boundingBox,
+      wallPlaneId: result.wallPlaneId,
+      processingTimeMs: result.processingTimeMs,
+      provider: result.provider,
+    });
   } catch (err) {
     next(err);
   }
@@ -87,5 +125,5 @@ async function getMeta(req, res, next) {
 
 module.exports = {
   analyzeAsset, getAnalysis, generateRecommendations, listRecommendations, getMeta,
-  processAsset, getPipelineStatus,
+  processAsset, getPipelineStatus, segmentWall,
 };

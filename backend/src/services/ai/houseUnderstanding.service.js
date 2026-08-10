@@ -54,6 +54,11 @@ async function runAnalysis(assetId) {
     return {
       ok: false,
       failureReason: result.failureReason,
+      // Which stage actually failed + whether it's worth retrying as-is
+      // (§17/§18) — was silently dropped here before, even though
+      // aiRegistry.run's envelope already carried it.
+      stage: result.stage,
+      retryable: result.retryable,
       job: await aiJobsModel.getJob(job.id),
     };
   }

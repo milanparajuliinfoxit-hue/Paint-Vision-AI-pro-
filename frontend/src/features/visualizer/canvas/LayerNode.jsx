@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Image as KonvaImage } from 'react-konva';
-import { applyPaintColor } from '../../../shared/lib/colorEngine';
+import { applyPaintColor, PAINT_STRENGTH, PAINT_LIGHTNESS_BLEND } from '../../../shared/lib/colorEngine';
 import { useImageElement } from './useImageElement';
 
 const PREVIEW_TINT = { r: 47, g: 93, b: 138 }; // --signal, used only for the unpainted mask preview
@@ -59,10 +59,10 @@ export default function LayerNode({ layer, baseImageData, width, height, colorRg
       // region onto the paint's own lightness while keeping relative shading;
       // the unpainted preview stays a soft, lightness-neutral wash.
       const painted = !!colorRgb;
-      const strength = painted ? 0.95 : 0.35;
+      const strength = painted ? PAINT_STRENGTH : 0.35;
       const result = applyPaintColor(baseImageData, maskData, targetRgb, strength, {
         transparentOutsideMask: true,
-        lightnessBlend: painted ? 0.45 : 0,
+        lightnessBlend: painted ? PAINT_LIGHTNESS_BLEND : 0,
       });
 
       const canvas = document.createElement('canvas');

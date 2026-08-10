@@ -167,6 +167,11 @@ export const ai = {
   process: (assetId, { force } = {}) =>
     request(`/api/assets/${assetId}/ai/process`, { method: 'POST', body: JSON.stringify({ force: !!force }) }, LONG_TIMEOUT_MS),
   getStatus: (assetId) => request(`/api/assets/${assetId}/ai/status`),
+  segmentWall: (assetId, { x, y, positivePoints, negativePoints, mode, tolerance }) =>
+    request(`/api/assets/${assetId}/ai/segment-wall`, {
+      method: 'POST',
+      body: JSON.stringify({ x, y, positivePoints, negativePoints, mode, tolerance }),
+    }, LONG_TIMEOUT_MS),
 };
 
 // --- History (append-only undo/redo log, persisted per project) ---

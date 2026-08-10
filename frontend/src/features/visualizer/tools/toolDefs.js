@@ -5,6 +5,7 @@ export const TOOL_GROUPS = [
   {
     label: 'Selection',
     tools: [
+      { id: 'ai-wall', label: 'AI Wall Detect', glyph: '🪄', shortcut: 'w' },
       { id: 'rect', label: 'Rectangle', glyph: '▭', shortcut: 'r' },
       { id: 'lasso', label: 'Lasso', glyph: '◌', shortcut: 'l' },
       { id: 'polygon', label: 'Polygon', shortcut: 'g', glyph: '⬠' },

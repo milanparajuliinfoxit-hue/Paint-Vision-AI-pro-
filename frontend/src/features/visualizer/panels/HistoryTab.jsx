@@ -34,10 +34,16 @@ export default function HistoryTab({ projectId, undoPointer, onJumpTo }) {
 
   // Undo-stack indices are assigned in chronological order regardless of
   // which page is currently rendered, so pagination never shifts an
-  // entry's jump target.
+  // entry's jump target. Must mirror useHistoryCommand.js's hydrateHistory
+  // filter exactly (recognized action type AND not superseded) — that's the
+  // same undoStack this jumps into, so a mismatched filter here would either
+  // jump to the wrong entry or let a click resurrect an abandoned redo
+  // branch through a path the undo/redo buttons already block. Superseded
+  // entries stay visible (real history, not hidden) but are not jumpable —
+  // same disabled styling already used for unrecognized action types.
   let jumpIndex = -1;
   const indexed = entries.map((entry) => {
-    const jumpable = !!ACTION_LABEL[entry.action];
+    const jumpable = !!ACTION_LABEL[entry.action] && !entry.superseded_at;
     if (jumpable) jumpIndex += 1;
     return { entry, jumpable, index: jumpIndex };
   });

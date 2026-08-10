@@ -22,7 +22,7 @@ import { rgbToLab } from '../../../shared/lib/colorEngine';
 // (house-aware selection). Absent when no analysis has been run yet; the
 // tool still falls back to its own boundary-aware color/step tolerance.
 export function useToolInteraction({
-  width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha, surfaceMasks, onSurfacePick, houseAlpha,
+  width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha, surfaceMasks, onSurfacePick, houseAlpha, onAiWallClick,
 }) {
   const activeTool = useVisualizerStore((s) => s.activeTool);
   const brushMode = useVisualizerStore((s) => s.brushMode);
@@ -132,6 +132,11 @@ export function useToolInteraction({
         // itself landed on the house (Section 12) — not just that some mask
         // came back non-empty. tolerance is passed through purely for logging.
         onCommitMask(mask, 'magic-wand', { clickX: x, clickY: y, tolerance: magicWandTolerance });
+        break;
+      }
+      case 'ai-wall': {
+        const isSubtract = evt?.altKey || maskRefineMode === 'remove';
+        onAiWallClick?.(pt, { isSubtract });
         break;
       }
       case 'eyedropper':

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../../../shared/ui/dialog';
 import { Button } from '../../../shared/ui/button';
 import ComparisonPreview from './ComparisonPreview';
-import { applyPaintColor } from '../../../shared/lib/colorEngine';
+import { applyPaintColor, PAINT_STRENGTH, PAINT_LIGHTNESS_BLEND } from '../../../shared/lib/colorEngine';
 import { exportsApi, assets as assetsApi } from '../../../shared/lib/api';
 import { useToast } from '../../../shared/ui/toast';
 
@@ -55,10 +55,10 @@ export default function ExportPanel({
         // Same parameters as LayerNode so the exported file matches what the
         // canvas shows — full pigment coverage + lightness re-anchoring.
         const painted = !!colorLookup(layer.current_color_id);
-        const strength = painted ? 0.95 : 0.35;
+        const strength = painted ? PAINT_STRENGTH : 0.35;
         const recolored = applyPaintColor(baseImageData, maskData, rgb, strength, {
           transparentOutsideMask: true,
-          lightnessBlend: painted ? 0.45 : 0,
+          lightnessBlend: painted ? PAINT_LIGHTNESS_BLEND : 0,
         });
 
         const layerCanvas = document.createElement('canvas');

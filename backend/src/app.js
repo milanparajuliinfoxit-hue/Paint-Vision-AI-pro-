@@ -66,6 +66,10 @@ app.use('/api/catalog', paintsRoutes);
 app.use('/api/catalog/import', importExportRoutes);
 app.use('/api/projects', projectsRoutes);
 app.use('/api/assets', assetsRoutes);
+
+// Direct route for wall segmentation (fallback in case sub‑router registration fails)
+const aiCtrl = require('./controllers/ai.controller');
+app.post('/api/assets/:assetId/ai/segment-wall', aiCtrl.segmentWall);
 app.use('/api/layers', layersRoutes);
 app.use('/api/exports', exportsRoutes);
 app.use('/api/meta', metaRoutes);
