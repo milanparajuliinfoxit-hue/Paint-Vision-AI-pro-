@@ -1,19 +1,23 @@
 version: '3.8'
 
+# Secrets are read from the environment (or a sibling .env file) — there are no
+# in-repo defaults, so the stack refuses to start rather than silently running
+# with a published password. See .env.example at the repo root.
 services:
   mysql:
     image: mysql:8.0
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root_change_me
-      MYSQL_DATABASE: paint_visualizer
-      MYSQL_USER: paint_app
-      MYSQL_PASSWORD: change-me
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME:-paint_visualizer}
+      MYSQL_USER: ${DB_USER:-paint_app}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
     ports:
-      - '3306:3306'
+      # Loopback only — the database has no business being reachable off-host.
+      - '127.0.0.1:3306:3306'
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./backend/src/sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - ./backend/src/sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
 
   backend:
     build: ./backend
@@ -21,13 +25,22 @@ services:
     ports:
       - '4000:4000'
     environment:
+      NODE_ENV: ${NODE_ENV:-production}
       DB_HOST: mysql
       DB_PORT: 3306
-      DB_USER: paint_app
-      DB_PASSWORD: change-me
-      DB_NAME: paint_visualizer
+      DB_USER: ${DB_USER:-paint_app}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-paint_visualizer}
       UPLOAD_ROOT: /data/uploads
-      CORS_ORIGIN: http://localhost:5173
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      # Required outside development: the API fails closed without it.
+      API_ACCESS_KEY: ${API_ACCESS_KEY:?set API_ACCESS_KEY}
+      AI_PROVIDER: ${AI_PROVIDER:-huggingface}
+      HF_API_KEY: ${HF_API_KEY:-}
+      HF_MODEL: ${HF_MODEL:-}
+      HF_API_URL: ${HF_API_URL:-}
+      CLIPDROP_API_KEY: ${CLIPDROP_API_KEY:-}
+      CLIPDROP_CLEANUP_URL: ${CLIPDROP_CLEANUP_URL:-}
     volumes:
       - uploads_data:/data/uploads
     depends_on:
@@ -39,7 +52,10 @@ services:
     ports:
       - '5173:5173'
     environment:
-      VITE_API_BASE_URL: http://localhost:4000
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:4000}
+      # Note: anything VITE_* is compiled into the browser bundle and is
+      # therefore public — the access key is an infra guard, not a user secret.
+      VITE_API_ACCESS_KEY: ${API_ACCESS_KEY:?set API_ACCESS_KEY}
     depends_on:
       - backend
 

@@ -9,7 +9,18 @@ async function create(req, res, next) {
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
     const { name, layerColorMap } = req.body;
-    if (!name) return res.status(400).json({ error: 'name is required' });
+    if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'name is required' });
+
+    // layerColorMap arrives as a JSON string on the multipart path; malformed
+    // input is a client error, not a crash.
+    let parsedColorMap;
+    if (layerColorMap !== undefined && layerColorMap !== null && layerColorMap !== '') {
+      try {
+        parsedColorMap = typeof layerColorMap === 'string' ? JSON.parse(layerColorMap) : layerColorMap;
+      } catch {
+        return res.status(400).json({ error: 'layerColorMap must be valid JSON' });
+      }
+    }
 
     let thumbnailPath = null;
     if (req.file) {
@@ -19,9 +30,9 @@ async function create(req, res, next) {
 
     const concept = await conceptsModel.createConcept({
       projectId: project.id,
-      name,
+      name: name.trim(),
       thumbnailPath,
-      layerColorMap: layerColorMap ? JSON.parse(layerColorMap) : undefined,
+      layerColorMap: parsedColorMap,
     });
     res.status(201).json(concept);
   } catch (err) { next(err); }

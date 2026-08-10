@@ -92,15 +92,101 @@ function looksLikeImage(buffer) {
   return IMAGE_MAGIC.some(({ bytes }) => bytes.every((b, i) => buffer[i] === b));
 }
 
-async function fetchRemoteImage(url, model) {
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${process.env.HF_API_KEY}` } });
-  if (!response.ok) {
-    throw new ProviderError(`Failed to download generated image from ${url} (HTTP ${response.status})`, {
+const DOWNLOAD_TIMEOUT_MS = 30 * 1000;
+const MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024;
+const PRIVATE_HOST_PATTERNS = [
+  /^localhost$/i,
+  /^127\./,
+  /^0\./,
+  /^10\./,
+  /^192\.168\./,
+  /^169\.254\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^\[?::1\]?$/,
+  /^\[?f[cd][0-9a-f]{2}:/i,
+  /\.internal$/i,
+  /\.local$/i,
+];
+
+/**
+ * The download URL comes from the model's response, i.e. from outside this
+ * system — treat it as untrusted: https only, no private/link-local hosts
+ * (SSRF into the deploy network, including cloud metadata endpoints), never
+ * the HF bearer token, and a bounded timeout plus size cap.
+ */
+function assertSafeDownloadUrl(rawUrl, model) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new ProviderError(`Model returned an unparseable image URL: ${String(rawUrl).slice(0, 200)}`, {
       provider: 'huggingface',
       model,
     });
   }
-  return Buffer.from(await response.arrayBuffer());
+  if (parsed.protocol !== 'https:') {
+    throw new ProviderError(`Refusing to download generated image over "${parsed.protocol}" (https required)`, {
+      provider: 'huggingface',
+      model,
+    });
+  }
+  if (PRIVATE_HOST_PATTERNS.some((pattern) => pattern.test(parsed.hostname))) {
+    throw new ProviderError(`Refusing to download generated image from non-public host "${parsed.hostname}"`, {
+      provider: 'huggingface',
+      model,
+    });
+  }
+  return parsed;
+}
+
+async function fetchRemoteImage(url, model) {
+  const safeUrl = assertSafeDownloadUrl(url, model);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+  let response;
+  try {
+    // No Authorization header: the destination is model-controlled.
+    response = await fetch(safeUrl, { redirect: 'error', signal: controller.signal });
+  } catch (err) {
+    throw new ProviderError(`Failed to download generated image from ${safeUrl.origin}: ${err.message}`, {
+      provider: 'huggingface',
+      model,
+      cause: err,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!response.ok) {
+    throw new ProviderError(`Failed to download generated image from ${safeUrl.origin} (HTTP ${response.status})`, {
+      provider: 'huggingface',
+      model,
+    });
+  }
+
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_DOWNLOAD_BYTES) {
+    throw new ProviderError(`Generated image is larger than the ${MAX_DOWNLOAD_BYTES} byte limit`, {
+      provider: 'huggingface',
+      model,
+    });
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > MAX_DOWNLOAD_BYTES) {
+    throw new ProviderError(`Generated image is larger than the ${MAX_DOWNLOAD_BYTES} byte limit`, {
+      provider: 'huggingface',
+      model,
+    });
+  }
+  if (!looksLikeImage(buffer)) {
+    throw new ProviderError('Downloaded generated "image" is not a recognizable image format', {
+      provider: 'huggingface',
+      model,
+    });
+  }
+  return buffer;
 }
 
 async function parseImageResponse(response, model) {

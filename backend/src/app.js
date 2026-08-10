@@ -25,12 +25,28 @@ const app = express();
 // browser block those loads even with CORS configured correctly, since CORP
 // is enforced independently of CORS.
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
+
+// CORS_ORIGIN is a comma-separated allowlist. It falls back to the local Vite
+// dev origins only — a wildcard default would let any site on the internet
+// drive the API from a victim's browser.
+const DEV_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+const allowedOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+const corsOrigins = allowedOrigins.length > 0 ? allowedOrigins : DEV_ORIGINS;
+app.use(cors({
+  origin: corsOrigins.includes('*') ? '*' : corsOrigins,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'x-api-key'],
+}));
 app.use(morgan('combined'));
 app.use(express.json({ limit: '2mb' }));
 
-// Rate limit upload-heavy endpoints specifically.
-const uploadLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
+// Baseline limit for the whole API, with a tighter one for upload-heavy routes.
+const apiLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 1000, standardHeaders: true, legacyHeaders: false });
+const uploadLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false });
+app.use('/api', apiLimiter);
 app.use('/api/projects/:projectId/assets', uploadLimiter);
 app.use('/api/catalog/import', uploadLimiter);
 
@@ -50,8 +66,14 @@ app.use('/api/exports', exportsRoutes);
 app.get('/files/*', (req, res, next) => {
   try {
     const relativePath = req.params[0];
+    let absolute;
+    try {
+      absolute = storage.absolutePath(relativePath);
+    } catch {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
     if (!storage.exists(relativePath)) return res.status(404).json({ error: 'File not found' });
-    res.sendFile(storage.absolutePath(relativePath));
+    res.sendFile(absolute);
   } catch (err) { next(err); }
 });
 

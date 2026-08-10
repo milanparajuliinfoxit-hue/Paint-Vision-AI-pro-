@@ -1,8 +1,8 @@
+const crypto = require('crypto');
 const pool = require('../config/db');
-const { v4: uuidv4 } = require('uuid');
 
 async function createAsset({ projectId, originalPath, width, height, exifOrientation }) {
-  const id = uuidv4();
+  const id = crypto.randomUUID();
   await pool.query(
     `INSERT INTO assets (id, project_id, original_path, width, height, exif_orientation, status)
      VALUES (?, ?, ?, ?, ?, ?, 'uploaded')`,
