@@ -34,12 +34,26 @@ const inFlight = new Set();
 async function startPipeline(assetId, { force = false } = {}) {
   if (inFlight.has(assetId)) return getStatus(assetId);
 
-  const current = await getStatus(assetId);
+  // Claim the slot *before* the first await, not after — the previous
+  // version checked-then-awaited-then-claimed, leaving a window where two
+  // near-simultaneous calls (e.g. a double-clicked "Try again") could both
+  // pass the `inFlight.has` check and both end up running the pipeline for
+  // the same asset. Node is single-threaded, so a synchronous check+claim
+  // with no await between them can't be interleaved by another call.
+  inFlight.add(assetId);
+  let current;
+  try {
+    current = await getStatus(assetId);
+  } catch (err) {
+    inFlight.delete(assetId);
+    throw err;
+  }
+
   if (!force && (current.stage === 'understanding' || current.stage === 'schemes' || current.stage === 'ready')) {
+    inFlight.delete(assetId); // nothing to run — release the claim, don't leave it stuck forever
     return current;
   }
 
-  inFlight.add(assetId);
   runPipeline(assetId).finally(() => inFlight.delete(assetId));
   return getStatus(assetId);
 }

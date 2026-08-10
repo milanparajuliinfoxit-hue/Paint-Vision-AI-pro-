@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ai, assets as assetsApi, meta } from '../../../shared/lib/api';
 import { loadAlphaGrid } from '../../../shared/lib/maskImage';
+import { unionAlphaGrids } from '../tools/maskOps';
 
 // Feature-flag/provider state from GET /api/meta — the UI renders capability
 // toggles (enabled/disabled) based on the server's actual configuration.
@@ -48,7 +49,7 @@ export function useSurfaceConstraintAlpha({ analysis, surfaceKey, width, height 
     if (!surface?.mask_path) return undefined;
 
     let cancelled = false;
-    loadAlphaGrid(assetsApi.fileUrl(surface.mask_path), width, height)
+    loadAlphaGrid(assetsApi.fileUrl(surface.mask_path), width, height, analysis?.job?.id)
       .then((grid) => { if (!cancelled) setAlpha(grid); })
       .catch(() => { if (!cancelled) setAlpha(null); });
     return () => { cancelled = true; };
@@ -74,7 +75,7 @@ export function useSurfaceAlphaGrids({ analysis, width, height }) {
     let cancelled = false;
     Promise.all(
       surfaces.map(async (surface) => {
-        const alpha = await loadAlphaGrid(assetsApi.fileUrl(surface.mask_path), width, height);
+        const alpha = await loadAlphaGrid(assetsApi.fileUrl(surface.mask_path), width, height, analysis?.job?.id);
         return { surface, alpha, width, height };
       })
     ).then((entries) => { if (!cancelled) setSurfaceMasks(entries); })
@@ -84,5 +85,31 @@ export function useSurfaceAlphaGrids({ analysis, width, height }) {
   }, [analysis, width, height]);
 
   return surfaceMasks;
+}
+
+// Union of every detected surface's mask (paintable or not — a window/door
+// is still part of the house) at canvas resolution: the deterministic
+// "house region" the house-aware Magic Wand intersects its flood fill
+// against, so a click on the house can never spread into sky, ground, or a
+// neighboring structure. Returns null while loading or when no analysis has
+// been run yet — callers fall back to the tool's own boundary-aware flood
+// fill alone in that case, never to a fully unconstrained one.
+export function useHouseProtectionAlpha({ analysis, width, height }) {
+  const [houseAlpha, setHouseAlpha] = useState(null);
+
+  useEffect(() => {
+    setHouseAlpha(null);
+    if (!width || !height) return undefined;
+    const surfaces = (analysis?.surfaces || []).filter((s) => s.mask_path);
+    if (surfaces.length === 0) return undefined;
+
+    let cancelled = false;
+    Promise.all(surfaces.map((s) => loadAlphaGrid(assetsApi.fileUrl(s.mask_path), width, height, analysis?.job?.id)))
+      .then((grids) => { if (!cancelled) setHouseAlpha(unionAlphaGrids(grids)); })
+      .catch(() => { if (!cancelled) setHouseAlpha(null); });
+    return () => { cancelled = true; };
+  }, [analysis, width, height]);
+
+  return houseAlpha;
 }
 

@@ -19,7 +19,10 @@ export default function CanvasStage({
   onEyedropper,
   constraintAlpha,
   surfaceMasks,
+  houseAlpha,
   onSurfacePick,
+  localMaskOverrides,
+  pendingNewLayer,
 }) {
   const containerRef = useRef(null);
   const stageRef = useRef(null);
@@ -38,7 +41,7 @@ export default function CanvasStage({
   const imageVisible = useVisualizerStore((s) => s.imageVisible);
   const fitSignal = useVisualizerStore((s) => s.fitSignal);
 
-  const tool = useToolInteraction({ width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha, surfaceMasks, onSurfacePick });
+  const tool = useToolInteraction({ width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha, surfaceMasks, onSurfacePick, houseAlpha });
 
   useEffect(() => {
     if (!containerRef.current) return undefined;
@@ -208,8 +211,25 @@ export default function CanvasStage({
                   height={height}
                   colorRgb={layer.id === activeLayerId && hoverPreviewColorRgb ? hoverPreviewColorRgb : colorLookup?.(layer.current_color_id)}
                   maskUrl={layer.mask_path ? assets.fileUrl(layer.mask_path) : null}
+                  localMaskData={localMaskOverrides?.get(layer.id)}
                 />
               ))}
+            {/* A new layer's mask is ready before the create request that
+                gives it a real id resolves — render it immediately, on top
+                (it's the newest thing painted), purely visually until the
+                real LayerNode above takes over. */}
+            {pendingNewLayer && (
+              <LayerNode
+                key="pending-new-layer"
+                layer={{ id: 'pending-new-layer', visible: true, opacity: 1 }}
+                baseImageData={baseImageData}
+                width={width}
+                height={height}
+                colorRgb={pendingNewLayer.colorRgb}
+                maskUrl={null}
+                localMaskData={pendingNewLayer.maskImageData}
+              />
+            )}
           </Layer>
 
           {/* Live tool-preview overlay — pure Konva shapes, no pixel work until commit. */}

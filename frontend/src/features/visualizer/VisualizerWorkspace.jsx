@@ -8,14 +8,16 @@ import { useIndexedDraft } from './hooks/useIndexedDraft';
 import { useCatalogList } from '../catalog/useCatalogList';
 import { useVisualizerStore } from './store/visualizerStore';
 import { useImageElement } from './canvas/useImageElement';
-import { imageDataToPngBlob, mergeMasks } from './tools/maskOps';
+import { imageDataToPngBlob, mergeMasks, isMaskEmpty, masksOverlap, isPointInsideAlpha, countMaskPixels } from './tools/maskOps';
+import { isColorMismatch } from './hooks/colorOwnership';
 import { rgbToLab } from '../../shared/lib/colorEngine';
 import { assets as assetsApi } from '../../shared/lib/api';
 import { loadMaskImageData } from '../../shared/lib/maskImage';
-import { useAssetAnalysis, useSurfaceConstraintAlpha, useSurfaceAlphaGrids } from './hooks/useAiAnalysis';
+import { useAssetAnalysis, useSurfaceConstraintAlpha, useSurfaceAlphaGrids, useHouseProtectionAlpha } from './hooks/useAiAnalysis';
 import { useApplySurface } from './hooks/useApplySurface';
 import { useToast } from '../../shared/ui/toast';
 import { useMediaQuery } from '../../shared/lib/useMediaQuery';
+import { logger } from '../../shared/lib/logger';
 
 import CanvasStage from './canvas/CanvasStage';
 import Toolbar from './panels/Toolbar';
@@ -24,7 +26,7 @@ import Inspector from './panels/Inspector';
 import SaveStatusIndicator from './panels/SaveStatusIndicator';
 import ExportPanel from './panels/ExportPanel';
 import ComparisonPreview from './panels/ComparisonPreview';
-import AiPipelineStatusBar from './panels/AiPipelineStatusBar';
+import AiPipelineStatusBar, { AiPipelineStatusChip } from './panels/AiPipelineStatusBar';
 import { Button } from '../../shared/ui/button';
 import { Sheet, SheetTrigger, SheetContent } from '../../shared/ui/sheet';
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '../../shared/ui/tooltip';
@@ -90,7 +92,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
 
   const { data: layerList = [] } = useLayersList(activeAssetId);
   const createLayer = useCreateLayer(activeAssetId);
-  const { commitMaskEdit, commitCreate, undo, redo, jumpTo, undoPointer, canUndo, canRedo } = useHistoryCommand(projectId, activeAssetId);
+  const { commitMaskEdit, commitCreate, commitDelete, undo, redo, jumpTo, undoPointer, canUndo, canRedo } = useHistoryCommand(projectId, activeAssetId);
 
   // Surface lock: when the active layer came from AI analysis (it carries an
   // ai_surface_key), clip brush strokes to that surface's detected mask so
@@ -108,6 +110,12 @@ export default function VisualizerWorkspace({ onColorFocus }) {
   // the surface-pick tool hit-tests a click against these to resolve which
   // wall/roof/etc. the dealer clicked, then paints the whole surface.
   const surfaceMasks = useSurfaceAlphaGrids({ analysis, width, height });
+  // House-aware Magic Wand: union of every detected surface's mask (walls,
+  // roof, trim, windows, doors — paintable or not), so a flood-fill
+  // selection can never spread into sky/ground/neighboring structures no
+  // matter how close the colors are. Null when no analysis has been run —
+  // the tool still applies its own boundary-aware color/step tolerance.
+  const houseAlpha = useHouseProtectionAlpha({ analysis, width, height });
   const { applySurface } = useApplySurface(projectId, activeAssetId, { width, height });
 
   // Semantic painting: clicking a detected surface creates (or updates, via
@@ -136,7 +144,37 @@ export default function VisualizerWorkspace({ onColorFocus }) {
   const maskCacheRef = useRef(new Map());
   const clearMaskCache = () => maskCacheRef.current.clear();
   useEffect(() => () => clearMaskCache(), []);
-  useEffect(() => { clearMaskCache(); }, [activeAssetId]);
+  useEffect(() => { clearMaskCache(); setLocalMaskOverrides(new Map()); }, [activeAssetId]);
+
+  // Instant-render override: the mask a stroke JUST produced, shown via
+  // LayerNode's localMaskData prop immediately — no waiting on the PNG
+  // upload -> layers-list refetch -> mask-file refetch chain that
+  // otherwise gates every visible paint/erase result behind 2-3 sequential
+  // network round trips (previously the actual source of the reported
+  // multi-second paint/erase delay — see mergeMaskIntoLayer/eraseFromLayer).
+  // Cleared once the server-confirmed state has caught up (persist
+  // success); deliberately kept on persist *failure* so a save error never
+  // reverts what the user already saw painted/erased.
+  const [localMaskOverrides, setLocalMaskOverrides] = useState(() => new Map());
+  function setLocalOverride(layerId, imageData) {
+    setLocalMaskOverrides((prev) => new Map(prev).set(layerId, imageData));
+  }
+  function clearLocalOverride(layerId) {
+    setLocalMaskOverrides((prev) => {
+      if (!prev.has(layerId)) return prev;
+      const next = new Map(prev);
+      next.delete(layerId);
+      return next;
+    });
+  }
+
+  // Same instant-render idea for a layer that doesn't exist yet — a
+  // selection tool's mask is ready to show immediately, but there is no
+  // layer id to key an override by until the create request returns one.
+  // A purely-visual preview (not inserted into the layers query cache)
+  // avoids every other call site that assumes layer.id is a real database
+  // integer needing to know about a temporary one.
+  const [pendingNewLayer, setPendingNewLayer] = useState(null); // { maskImageData, colorRgb } | null
 
   async function getLayerMaskData(layer) {
     const cached = maskCacheRef.current.get(layer.id);
@@ -160,24 +198,110 @@ export default function VisualizerWorkspace({ onColorFocus }) {
     return run;
   }
 
-  // Read-merge-upload for a stroke on an existing layer. Uses the in-memory
-  // cache as the merge base so consecutive strokes always stack on the latest
-  // result (no per-stroke PNG refetch, no stale base).
+  // Read-merge-render-upload for a stroke on an existing layer. Uses the
+  // in-memory cache as the merge base so consecutive strokes always stack
+  // on the latest result (no per-stroke PNG refetch, no stale base). The
+  // merged result renders via setLocalOverride the instant it's computed —
+  // persistence (network) runs after, in the background, and never gates
+  // what's on screen.
   function mergeMaskIntoLayer(layer, strokeMask, mode) {
     return enqueueMaskWrite(async () => {
       const existing = await getLayerMaskData(layer);
       const merged = mergeMasks(existing, strokeMask, mode);
       maskCacheRef.current.set(layer.id, { path: layer.mask_path, imageData: merged });
-      const blob = await imageDataToPngBlob(merged);
-      return commitMaskEdit({ action: 'mask-edited', layerId: layer.id, maskBlob: blob, beforeMaskPath: layer.mask_path });
+      setLocalOverride(layer.id, merged);
+
+      const startedAt = performance.now();
+      logger.info('paint.stroke.persist.started', { layerId: layer.id });
+      try {
+        const blob = await imageDataToPngBlob(merged);
+        await commitMaskEdit({ action: 'mask-edited', layerId: layer.id, maskBlob: blob, beforeMaskPath: layer.mask_path });
+        clearLocalOverride(layer.id);
+        logger.info('paint.stroke.persist.completed', { layerId: layer.id, durationMs: Math.round(performance.now() - startedAt) });
+      } catch (err) {
+        // Local override deliberately NOT cleared — the stroke stays
+        // visible exactly as painted; only the save failed, not the edit.
+        logger.error('paint.stroke.persist.failed', { layerId: layer.id, message: err.message, durationMs: Math.round(performance.now() - startedAt) });
+        showToast('This stroke is shown but not yet saved — check your connection.', { variant: 'danger' });
+      }
     });
+  }
+
+  // Eraser-only: same read-merge shape as mergeMaskIntoLayer, but a stroke
+  // that leaves nothing behind deletes the layer instead of persisting an
+  // invisible empty mask. Not applied to the brush's mask-edit "subtract"
+  // mode — that's a deliberate, precise editing action where an unexpected
+  // layer deletion would be surprising, not helpful.
+  function eraseFromLayer(layer, strokeMask) {
+    return enqueueMaskWrite(async () => {
+      const startedAt = performance.now();
+      logger.info('erase.stroke.started', { layerId: layer.id });
+
+      const existing = await getLayerMaskData(layer);
+      const merged = mergeMasks(existing, strokeMask, 'subtract');
+
+      if (isMaskEmpty(merged)) {
+        // Nothing left to show. mask_path is deliberately left pointing at
+        // the layer's last real (non-empty) mask file — the merged empty
+        // result is never uploaded — so this is a single 'delete' command
+        // through the existing soft-delete path: undo (restore-by-id)
+        // brings the layer back exactly as it looked right before this
+        // stroke, with no separate "revert the mask" step, and no wasted
+        // upload of a mask nobody will ever see. commitDelete's underlying
+        // mutation is optimistic (see useLayers.js), so the layer leaves
+        // the canvas and the Layers panel immediately, not after a
+        // round trip.
+        logger.info('erase.layer.empty', { layerId: layer.id });
+        maskCacheRef.current.delete(layer.id);
+        clearLocalOverride(layer.id);
+        commitDelete(layer);
+        logger.info('erase.layer.auto_deleted', { layerId: layer.id, durationMs: Math.round(performance.now() - startedAt) });
+        return;
+      }
+
+      setLocalOverride(layer.id, merged);
+      logger.info('erase.stroke.completed', { layerId: layer.id, durationMs: Math.round(performance.now() - startedAt) });
+
+      const persistStartedAt = performance.now();
+      try {
+        maskCacheRef.current.set(layer.id, { path: layer.mask_path, imageData: merged });
+        const blob = await imageDataToPngBlob(merged);
+        await commitMaskEdit({ action: 'mask-edited', layerId: layer.id, maskBlob: blob, beforeMaskPath: layer.mask_path });
+        clearLocalOverride(layer.id);
+        logger.info('erase.stroke.persist.completed', { layerId: layer.id, durationMs: Math.round(performance.now() - persistStartedAt) });
+      } catch (err) {
+        logger.error('erase.stroke.persist.failed', { layerId: layer.id, message: err.message, durationMs: Math.round(performance.now() - persistStartedAt) });
+        showToast('This erase is shown but not yet saved — check your connection.', { variant: 'danger' });
+      }
+    });
+  }
+
+  // Resolves which layer an eraser stroke should act on without requiring
+  // the dealer to have clicked it in the Layers panel first. Preference
+  // order: the explicitly-selected layer if it's actually editable, else
+  // the topmost visible+unlocked layer whose *own paint* the stroke
+  // actually touches (layerList is order_index ASC i.e. bottom-to-top, so
+  // scan in reverse) — never a hidden or locked layer, and never more than
+  // one layer per stroke.
+  async function resolveEraseTargetLayer(strokeMask) {
+    if (activeLayerId) {
+      const explicit = layerList.find((l) => l.id === activeLayerId);
+      if (explicit && explicit.visible && !explicit.locked && explicit.mask_path) return explicit;
+    }
+    for (let i = layerList.length - 1; i >= 0; i--) {
+      const layer = layerList[i];
+      if (!layer.visible || layer.locked || !layer.mask_path) continue;
+      const layerMask = await getLayerMaskData(layer);
+      if (masksOverlap(layerMask, strokeMask)) return layer;
+    }
+    return null;
   }
 
   // Undo/redo/jump re-point layer masks server-side; the cache key would
   // collide (an undo back to an earlier path looks like a hit), so drop it.
-  const undoWithCache = () => { clearMaskCache(); undo(); };
-  const redoWithCache = () => { clearMaskCache(); redo(); };
-  const jumpToWithCache = (i) => { clearMaskCache(); jumpTo(i); };
+  const undoWithCache = () => { clearMaskCache(); setLocalMaskOverrides(new Map()); undo(); };
+  const redoWithCache = () => { clearMaskCache(); setLocalMaskOverrides(new Map()); redo(); };
+  const jumpToWithCache = (i) => { clearMaskCache(); setLocalMaskOverrides(new Map()); jumpTo(i); };
 
   const { data: catalogData } = useCatalogList({ pageSize: 2000 });
   const catalogRows = catalogData?.rows || [];
@@ -215,47 +339,105 @@ export default function VisualizerWorkspace({ onColorFocus }) {
   }, [undoWithCache, redoWithCache]);
 
   async function handleCommitMask(maskImageData, createdVia, opts = {}) {
-    // Dedicated eraser tool: always subtracts from the active layer's
-    // existing mask, regardless of brush mode/Alt state. Never touches the
-    // original photo or any other layer — it only shrinks a paint mask.
+    // Dedicated eraser tool: always subtracts, regardless of brush
+    // mode/Alt state, from whichever layer resolveEraseTargetLayer decides
+    // the stroke actually landed on — the dealer doesn't have to select a
+    // layer in the panel first. Never touches the original photo or any
+    // other layer — it only shrinks (or, if nothing's left, removes) one
+    // paint layer.
     if (createdVia === 'eraser') {
-      if (!activeLayerId) {
-        showToast('Select a layer first to erase paint from it.', { variant: 'danger' });
+      const targetLayer = await resolveEraseTargetLayer(maskImageData);
+      if (!targetLayer) {
+        showToast('Nothing painted there to erase.', { variant: 'danger' });
         return;
       }
-      const activeLayer = layerList.find((l) => l.id === activeLayerId);
-      if (!activeLayer?.mask_path) return; // nothing painted on this layer yet
-      await mergeMaskIntoLayer(activeLayer, maskImageData, 'subtract');
+      await eraseFromLayer(targetLayer, maskImageData);
       return;
+    }
+
+    // Magic Wand: reject a click that landed outside the detected house
+    // region — or that, even with the tool's own boundary-aware flood fill
+    // (see maskOps.floodFillMask), produced no connected selection at all —
+    // instead of silently creating an empty/stray paint layer. Threshold
+    // 128 (not floodFillMask's looser 32) because a *click* should land
+    // solidly on a detected surface, not merely its soft feathered edge.
+    if (createdVia === 'magic-wand') {
+      const clickOutsideHouse = houseAlpha
+        ? !isPointInsideAlpha(houseAlpha, width, height, opts.clickX, opts.clickY, 128)
+        : false; // no AI house mask available — the boundary-aware flood fill is the only safeguard
+      if (clickOutsideHouse || isMaskEmpty(maskImageData)) {
+        logger.info('magic_wand.selection.rejected', { assetId: activeAssetId, hasHouseMask: !!houseAlpha });
+        showToast('No selectable house region found.', { variant: 'danger' });
+        return;
+      }
+      logger.info('magic_wand.selection.completed', {
+        assetId: activeAssetId,
+        selectionArea: countMaskPixels(maskImageData),
+        tolerance: opts.tolerance,
+        hasHouseMask: !!houseAlpha,
+      });
     }
 
     // Mask-edit mode refines an *existing* layer's mask rather than
-    // producing a new one (requirements doc, Section 5.2).
+    // producing a new one (requirements doc, Section 5.2) — but only while
+    // the pending color still matches what this layer is already painted.
+    // A layer holds exactly one current_color_id, so if the dealer picked a
+    // *different* color since this layer was last painted, an "add to mask"
+    // stroke is a new paint operation (its own layer, its own color), not a
+    // silent repaint of this layer's existing region — that silent repaint
+    // was the reported color-bleed bug. Subtracting never introduces color,
+    // so it's unaffected by this check.
     if (createdVia === 'brush' && opts.brushMode === 'mask-edit' && activeLayerId) {
       const activeLayer = layerList.find((l) => l.id === activeLayerId);
-      if (!activeLayer?.mask_path) {
-        if (opts.subtract) return; // nothing to subtract from
-        // First paint on this layer: no base to merge, just the stroke itself.
-        const blob = await imageDataToPngBlob(maskImageData);
-        await commitMaskEdit({ action: 'mask-edited', layerId: activeLayerId, maskBlob: blob, beforeMaskPath: null });
+      const colorMismatch = isColorMismatch({ activeLayer, pendingColorId, subtract: opts.subtract });
+      if (!colorMismatch) {
+        if (!activeLayer?.mask_path) {
+          if (opts.subtract) return; // nothing to subtract from
+          // First paint on this layer: no base to merge, just the stroke itself.
+          const blob = await imageDataToPngBlob(maskImageData);
+          await commitMaskEdit({ action: 'mask-edited', layerId: activeLayerId, maskBlob: blob, beforeMaskPath: null });
+          return;
+        }
+        await mergeMaskIntoLayer(activeLayer, maskImageData, opts.subtract ? 'subtract' : 'add');
         return;
       }
-      await mergeMaskIntoLayer(activeLayer, maskImageData, opts.subtract ? 'subtract' : 'add');
-      return;
+      // else: color changed since this layer was painted — fall through to
+      // create a new layer below, carrying the newly selected color.
     }
 
-    const blob = await imageDataToPngBlob(maskImageData);
-    const layer = await createLayer.mutateAsync({
-      fields: {
-        name: DEFAULT_LAYER_NAME[createdVia] || 'New layer',
-        createdVia,
-        currentColorId: pendingColorId || undefined,
-        orderIndex: layerList.length,
-      },
-      maskBlob: blob,
-    });
-    setActiveLayerId(layer.id);
-    commitCreate({ layerId: layer.id, createdVia });
+    // Instant preview while the create request is in flight — there's no
+    // layer id yet to key a localMaskOverrides entry by, so this renders
+    // purely visually (see pendingNewLayer's declaration) until the real
+    // layer exists.
+    const previewColorRgb = pendingColorId ? colorLookup(pendingColorId) : null;
+    setPendingNewLayer({ maskImageData, colorRgb: previewColorRgb });
+
+    const startedAt = performance.now();
+    logger.info('paint.stroke.persist.started', { createdVia });
+    try {
+      const blob = await imageDataToPngBlob(maskImageData);
+      const layer = await createLayer.mutateAsync({
+        fields: {
+          name: DEFAULT_LAYER_NAME[createdVia] || 'New layer',
+          createdVia,
+          currentColorId: pendingColorId || undefined,
+          orderIndex: layerList.length,
+        },
+        maskBlob: blob,
+      });
+      setActiveLayerId(layer.id);
+      commitCreate({ layerId: layer.id, createdVia });
+      logger.info('paint.stroke.persist.completed', { layerId: layer.id, durationMs: Math.round(performance.now() - startedAt) });
+    } catch (err) {
+      logger.error('paint.stroke.persist.failed', { createdVia, message: err.message, durationMs: Math.round(performance.now() - startedAt) });
+      showToast('Could not save this new layer — check your connection and try again.', { variant: 'danger' });
+    } finally {
+      // useCreateLayer's onSuccess writes the real layer straight into the
+      // layers query cache (no extra refetch), so by the time this runs the
+      // real LayerNode is already ready to take over — no visible gap
+      // between clearing this preview and the real layer appearing.
+      setPendingNewLayer(null);
+    }
   }
 
   function handleEyedropper(pt) {
@@ -300,13 +482,23 @@ export default function VisualizerWorkspace({ onColorFocus }) {
     <SidePanel
       projectId={projectId}
       assetId={activeAssetId}
-      colorLookup={colorLookup}
       undoPointer={undoPointer}
       onJumpTo={jumpToWithCache}
       onSelectAsset={setActiveAssetId}
+      width={width}
+      height={height}
+    />
+  );
+
+  const inspector = (
+    <Inspector
+      projectId={projectId}
+      assetId={activeAssetId}
+      colorLookup={colorLookup}
       baseImageData={baseImageData}
       width={width}
       height={height}
+      onOpenExport={() => setShowExport(true)}
     />
   );
 
@@ -368,6 +560,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
       )}
 
       <div className="ml-auto flex items-center gap-3">
+        <AiPipelineStatusChip assetId={activeAssetId} />
         <SaveStatusIndicator />
         <Button size="sm" className="hidden md:inline-flex" onClick={() => setShowExport(true)}>
           <Download size={14} strokeWidth={2.5} /> Export
@@ -443,12 +636,15 @@ export default function VisualizerWorkspace({ onColorFocus }) {
             onEyedropper={handleEyedropper}
             constraintAlpha={constraintAlpha}
             surfaceMasks={surfaceMasks}
+            houseAlpha={houseAlpha}
             onSurfacePick={handleSurfacePick}
+            localMaskOverrides={localMaskOverrides}
+            pendingNewLayer={pendingNewLayer}
           />
         </div>
 
         <div className="hidden xl:flex">
-          <Inspector projectId={projectId} assetId={activeAssetId} onOpenExport={() => setShowExport(true)} />
+          {inspector}
         </div>
         <Sheet open={showRightSheet} onOpenChange={setShowRightSheet}>
           <SheetTrigger asChild>
@@ -460,7 +656,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
             </button>
           </SheetTrigger>
           <SheetContent open={showRightSheet}>
-            <Inspector projectId={projectId} assetId={activeAssetId} onOpenExport={() => setShowExport(true)} />
+            {inspector}
           </SheetContent>
         </Sheet>
       </div>

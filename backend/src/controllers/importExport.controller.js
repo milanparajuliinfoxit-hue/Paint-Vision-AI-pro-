@@ -1,9 +1,18 @@
 const importService = require('../services/excelImport.service');
 const paintsModel = require('../services/paints.model');
+const { isRealXlsx } = require('../middleware/uploadValidation.middleware');
 
 async function previewImport(req, res, next) {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    // multer's fileFilter only checked the client-declared Content-Type
+    // (and now accepts the common "application/octet-stream" fallback,
+    // since real clients legitimately send that for .xlsx) — this checks
+    // the actual bytes. Needed because the xlsx library itself doesn't
+    // reject non-spreadsheet input; it silently returns an empty workbook.
+    if (!isRealXlsx(req.file.buffer)) {
+      return res.status(400).json({ error: 'That file is not a valid Excel (.xlsx) file.' });
+    }
     const report = await importService.previewImport(req.file.buffer);
     res.json(report);
   } catch (err) { next(err); }

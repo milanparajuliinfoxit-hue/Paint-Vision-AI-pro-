@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 
 const { requireAccessKey, isValidKey } = require('./middleware/accessKey.middleware');
 const { errorHandler } = require('./middleware/errorHandler.middleware');
+const { requestId } = require('./middleware/requestId.middleware');
 
 const paintsRoutes = require('./routes/paints.routes');
 const importExportRoutes = require('./routes/importExport.routes');
@@ -28,12 +29,34 @@ const app = express();
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(morgan('combined'));
+app.use(requestId);
 app.use(express.json({ limit: '2mb' }));
 
 // Rate limit upload-heavy endpoints specifically.
 const uploadLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
 app.use('/api/projects/:projectId/assets', uploadLimiter);
 app.use('/api/catalog/import', uploadLimiter);
+
+// /clean calls a billed external inpainting API per request (unlike the
+// limiters above, which just guard local disk/DB writes) — a much tighter
+// cap so a retry loop or a stray automation can't run up the provider bill.
+const cleanupLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 });
+app.use('/api/assets/:assetId/clean', cleanupLimiter);
+
+// Same reasoning for the two AI capabilities that can be configured to call
+// a billed external provider (house-understanding/hf-vision, and — via the
+// autonomous pipeline's /process — both in sequence). `skip` excludes GET
+// so polling /ai/analysis, /ai/recommendations, or /ai/status (cheap DB
+// reads, and /ai/status is polled every 2s while a job runs) is never
+// throttled — only the calls that actually trigger provider work are.
+const aiRunLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  skip: (req) => req.method !== 'POST',
+});
+app.use('/api/assets/:assetId/ai/analyze', aiRunLimiter);
+app.use('/api/assets/:assetId/ai/recommendations', aiRunLimiter);
+app.use('/api/assets/:assetId/ai/process', aiRunLimiter);
 
 app.use('/api', requireAccessKey);
 

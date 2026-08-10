@@ -1,17 +1,28 @@
-const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const Jimp = require('jimp');
 const storage = require('../services/storage.service');
 const assetsModel = require('../services/assets.model');
 const projectsModel = require('../services/projects.model');
-const layersModel = require('../services/layers.model');
-const aiJobsModel = require('../services/aiJobs.model');
 const aiProxy = require('../services/aiProxy.service');
+const logger = require('../services/logger.service');
 const objectRemovalMask = require('../services/ai/objectRemovalMask.service');
+const removalQuality = require('../services/ai/removalQuality.service');
+const { isRealImage, exceedsMaxDimensions, MAX_IMAGE_DIMENSION } = require('../middleware/uploadValidation.middleware');
 
 async function uploadAsset(req, res, next) {
   try {
     if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
+    // multer's fileFilter only checked the client-declared Content-Type,
+    // which a request can lie about — this checks the actual bytes.
+    if (!isRealImage(req.file.buffer)) {
+      return res.status(400).json({ error: 'That file is not a valid image.' });
+    }
+    // Decompression-bomb guard: reject an oversized image by its *header*
+    // dimensions before it's ever written to disk or decoded anywhere
+    // downstream (analysis, cleanup mask sizing all Jimp.read() it later).
+    if (exceedsMaxDimensions(req.file.buffer)) {
+      return res.status(400).json({ error: `Image dimensions exceed the ${MAX_IMAGE_DIMENSION}px limit.` });
+    }
     const project = await projectsModel.getProject(req.params.projectId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -75,6 +86,18 @@ async function requestCleanup(req, res, next) {
 
     const cleanedBuffer = await aiProxy.callCleanup(imageBuffer, maskBuffer);
 
+    // Reject the result outright if it changed the house itself too much —
+    // a correct mask doesn't guarantee the inpainting model actually
+    // respected it. The original is retained; nothing is written to disk.
+    const damageCheck = await removalQuality.checkHouseDamage(asset.id, imageBuffer, cleanedBuffer);
+    if (damageCheck.damaged) {
+      const reverted = await assetsModel.updateAssetStatus(asset.id, {
+        status: 'uploaded',
+        errorMessage: `Cleanup was skipped — it would have altered ${Math.round(damageCheck.changedFraction * 100)}% of the house itself, not just the surroundings.`,
+      });
+      return res.json({ ...reverted, cleanupRejected: true });
+    }
+
     // UPLOAD_ROOT already ends in the app's uploads folder — asset.id alone
     // is enough, no need to re-nest under another 'uploads' segment.
     const relativeDir = asset.id;
@@ -107,11 +130,6 @@ async function deleteAsset(req, res, next) {
     const asset = await assetsModel.getAsset(req.params.assetId);
     if (!asset) return res.status(404).json({ error: 'Asset not found' });
 
-    // Grab mask paths before the row (and its layers, via FK cascade)
-    // disappears — including soft-deleted layers, since their mask files
-    // are still real files on disk that need cleaning up too.
-    const layers = await layersModel.listAllLayersForAsset(asset.id);
-    const aiMaskPaths = await aiJobsModel.listMaskPathsForAsset(asset.id);
     const project = asset.project_id ? await projectsModel.getProject(asset.project_id) : null;
 
     await assetsModel.deleteAsset(asset.id);
@@ -123,14 +141,21 @@ async function deleteAsset(req, res, next) {
       await projectsModel.updateProject(project.id, { coverAssetId: remaining[0]?.id || null });
     }
 
-    await storage.deleteFile(asset.original_path);
-    if (asset.cleaned_path) await storage.deleteFile(asset.cleaned_path);
-    for (const layer of layers) {
-      if (layer.mask_path) await storage.deleteFile(layer.mask_path);
+    // Best-effort disk cleanup after the DB commit — never rolls back an
+    // already-committed delete. An asset owns two disjoint real locations
+    // on disk (see storage.service.js's removeTree comment): <assetId>/
+    // for original/cleaned photos + AI masks, and the separate
+    // uploads/<assetId>/ wrapper for layer masks (layers.controller.js's
+    // relativeDir nests under an extra literal "uploads" segment that
+    // asset photos don't). Both are removed in full rather than
+    // enumerating known files — the previous file-by-file approach missed
+    // the masks wrapper entirely, leaving orphaned UUID directories behind.
+    try {
+      await storage.removeTree(asset.id);
+      await storage.removeTree(`uploads/${asset.id}`);
+    } catch (err) {
+      logger.error({ event: 'asset.delete.filesystem_cleanup_failed', assetId: asset.id, error: err.message });
     }
-    for (const maskPath of aiMaskPaths) await storage.deleteFile(maskPath);
-    await storage.deleteDirIfEmpty(path.join(asset.id, 'ai'));
-    await storage.deleteDirIfEmpty(asset.id);
 
     res.status(204).end();
   } catch (err) { next(err); }

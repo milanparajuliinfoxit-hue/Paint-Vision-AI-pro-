@@ -8,7 +8,7 @@ import ColorGrid from './ColorGrid';
 export default function CatalogTab({ projectId, assetId }) {
   const { data: catalogData } = useCatalogList({ pageSize: 2000 });
   const { isFavorite, toggleFavorite, markRecentlyUsed } = useFavorites();
-  const { pickColor, hoverColor, activeLayer } = useApplyColor(projectId, assetId);
+  const { pickColor, hoverColor, canRecolorActiveLayer } = useApplyColor(projectId, assetId);
   const pendingColorId = useVisualizerStore((s) => s.pendingColorId);
   const [query, setQuery] = useState('');
 
@@ -34,7 +34,7 @@ export default function CatalogTab({ projectId, assetId }) {
           aria-label="Search catalog"
           className="w-full text-xs rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 outline-none focus:border-[var(--signal)]"
         />
-        {!activeLayer && <p className="text-[10px] text-[var(--graphite)] mt-1.5">Select a layer to apply a color to it.</p>}
+        {!canRecolorActiveLayer && <p className="text-[10px] text-[var(--graphite)] mt-1.5">Select a layer to apply a color to it.</p>}
       </div>
       <div className="flex-1 overflow-y-auto">
         <ColorGrid

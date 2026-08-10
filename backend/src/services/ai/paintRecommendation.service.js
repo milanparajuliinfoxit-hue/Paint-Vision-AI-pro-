@@ -11,13 +11,24 @@ const assetsModel = require('../assets.model');
 const paintsModel = require('../paints.model');
 const aiJobsModel = require('../aiJobs.model');
 const recommendationsModel = require('../paintRecommendation.model');
+const { withLock } = require('./inFlightLock.service');
 
 // job_type recorded for this capability's ai_jobs audit rows — also what the
 // pipeline orchestrator (aiPipeline.service.js) polls for to know a scheme
 // batch has actually been generated for the asset's current analysis.
 const JOB_TYPE = 'paint-recommendation';
 
-async function generateRecommendations(assetId, { count } = {}) {
+// Locked per asset (not per asset+count — the thing being protected is the
+// clearForAsset-then-recreate loop below, which is asset-scoped; two
+// concurrent calls with different `count` values should still serialize,
+// not run in parallel and race each other's delete/insert). A second
+// concurrent caller awaits and gets the first caller's result rather than
+// running the provider and the clear+recreate again.
+function generateRecommendations(assetId, options = {}) {
+  return withLock(`recommend:${assetId}`, () => runGenerateRecommendations(assetId, options));
+}
+
+async function runGenerateRecommendations(assetId, { count } = {}) {
   const asset = await assetsModel.getAsset(assetId);
   if (!asset) {
     const err = new Error('Asset not found');

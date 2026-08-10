@@ -1,21 +1,25 @@
 /**
- * Mock house-understanding provider (heuristic, explainable, zero-dependency
- * on an ML vendor). This is the DEFAULT provider so the whole AI pipeline is
- * demonstrable end-to-end without API keys — and it follows the same spirit
- * as the existing client-side colorSuggest.js: rule-based, tunable, honest
- * about its confidence.
+ * Mock house-understanding provider — TEST-ONLY / NOT PRODUCTION-REACHABLE.
+ *
+ * NOT registered in aiRegistry.service.js's PROVIDERS list and cannot be
+ * selected by any production configuration — this file is not "local AI" in
+ * the sense the rest of this AI module is (no model, no GPU, no ML
+ * dependency at all; it's deterministic Jimp-based image-ops heuristics,
+ * same spirit as the client-side colorSuggest.js). It's kept only as a
+ * fixture a test could import directly if one needs a deterministic
+ * house-understanding-shaped input without a real provider call. If nothing
+ * ever imports it, it's safe to delete outright.
  *
  * It runs a small image-ops pipeline server-side (via `jimp`):
  *   downscale -> per-pixel LAB/HSL features -> sky/vegetation masking ->
  *   house bounding box -> roof / wall / trim / door / window / gutter masks ->
  *   object candidates (trees, obstructions, neighbour houses) -> context colors.
  *
- * Everything it returns is the exact structured contract a real segmentation
- * provider would return (see providers/httpVisionProvider.js), so swapping
- * `AI_ANALYSIS_PROVIDER=mock` for a real vendor changes no other code.
- *
- * It is a stand-in, not a model: it cannot detect cars reliably or classify
- * complex architectural styles. Real deployments should set a real provider.
+ * Everything it returns matches the app's house-understanding contract
+ * (house/surfaces/objects/context), which is why it's convenient as a test
+ * fixture — but it must never be mistaken for or silently substituted as
+ * real AI. It cannot detect cars reliably or classify complex architectural
+ * styles; it's a stand-in, not a model.
  */
 const Jimp = require('jimp');
 const aiConfig = require('../../../config/aiConfig');

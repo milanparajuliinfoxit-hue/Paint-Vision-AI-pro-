@@ -12,13 +12,42 @@
 const pool = require('../config/db');
 const { classifyObject } = require('./ai/objectClassification');
 
+// Throws a typed, catchable error (err.code === 'AI_JOB_ALREADY_RUNNING")
+// if a 'running' job of this type already exists for this asset — enforced
+// by the database itself (uq_ai_jobs_running, a unique index over a
+// generated column that's non-null only while status='running'; see
+// schema.sql), not just the in-process inFlightLock.service.js guard. That
+// guard is correct for this app's actual single-instance deployment but
+// wouldn't hold if it ever ran as multiple instances behind a load
+// balancer; this constraint holds regardless, because MySQL enforces it,
+// not this process.
 async function createJob({ assetId, jobType, provider }) {
-  const [result] = await pool.query(
-    `INSERT INTO ai_jobs (asset_id, job_type, provider, status)
-     VALUES (?, ?, ?, 'running')`,
-    [assetId, jobType, provider]
+  try {
+    const [result] = await pool.query(
+      `INSERT INTO ai_jobs (asset_id, job_type, provider, status)
+       VALUES (?, ?, ?, 'running')`,
+      [assetId, jobType, provider]
+    );
+    return getJob(result.insertId);
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY' && err.sqlMessage?.includes('uq_ai_jobs_running')) {
+      const running = await getRunningJob(assetId, jobType);
+      const typedErr = new Error(`A ${jobType} job is already running for this asset.`);
+      typedErr.code = 'AI_JOB_ALREADY_RUNNING';
+      typedErr.status = 409;
+      typedErr.existingJob = running;
+      throw typedErr;
+    }
+    throw err;
+  }
+}
+
+async function getRunningJob(assetId, jobType) {
+  const [rows] = await pool.query(
+    `SELECT * FROM ai_jobs WHERE asset_id = ? AND job_type = ? AND status = 'running' ORDER BY id DESC LIMIT 1`,
+    [assetId, jobType]
   );
-  return getJob(result.insertId);
+  return rows[0] || null;
 }
 
 async function getJob(id) {
@@ -182,7 +211,7 @@ function parseJson(v) {
 }
 
 module.exports = {
-  createJob, getJob, markSuccess, markFailed, listJobsForAsset,
+  createJob, getJob, getRunningJob, markSuccess, markFailed, listJobsForAsset,
   createSurface, getSurface, createObject, getObject,
   listSurfacesForJob, listObjectsForJob, getLatestAnalysis, listMaskPathsForAsset, deleteAnalysesForAsset,
 };

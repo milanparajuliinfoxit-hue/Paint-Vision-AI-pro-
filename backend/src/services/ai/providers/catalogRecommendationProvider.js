@@ -2,8 +2,9 @@
  * Catalog paint-recommendation provider.
  *
  * The "AI" here is rule-based color theory applied to the structured house
- * understanding (see mockProvider / httpVisionProvider) and scored ONLY
- * against colors that already exist in the paint catalog table. The engine
+ * understanding (produced by whichever 'house-understanding' provider is
+ * active — see aiRegistry.service.js) and scored ONLY against colors that
+ * already exist in the paint catalog table. The engine
  * never invents a color and never fabricates a swatch — every scheme is a
  * set of paint ids that resolve to real catalog rows.
  *
@@ -36,6 +37,24 @@ const ROLE_ORDER = ['primary-wall', 'accent-wall', 'trim', 'doors', 'roof', 'gut
 // Each template is a complete, deterministic color scheme. `keep: true` on
 // roof means "match the roof color already in the photo" — some schemes keep
 // the roof, others are left to the fixed-hue templates' own roof handling.
+// House-context affinity (Phase 8): a modest nudge, not the dominant signal
+// — catalog fit and contrast (scoreScheme below) are more objectively
+// grounded than a template-to-house-style association, so this is weighted
+// lightly. Values are -1..1; 0 (default, most template/material pairs) means
+// "no particular reason for or against." Material keys match whichever
+// house-understanding provider's material-classification output (e.g.
+// mockProvider.js's guessMaterial()).
+const STYLE_AFFINITY = {
+  'earthy-warm': { material: { brick: 0.6, wood: 0.3 }, style: { traditional: 0.2 } },
+  heritage: { material: { brick: 0.5 }, style: { traditional: 0.5, ranch: 0.1 } },
+  'classic-neutral': { material: { render: 0.2 }, style: { traditional: 0.3 } },
+  'modern-monochrome': { material: { render: 0.4 }, style: { modern: 0.6 } },
+  'bold-accent': { style: { modern: 0.3 } },
+  coastal: { material: { render: 0.2, brick: -0.3 }, style: { modern: 0.1 } },
+  'fresh-garden': { material: { brick: -0.2 } },
+  'soft-pastel': {},
+};
+
 const TEMPLATES = [
   {
     id: 'classic-neutral', name: 'Classic Neutrals', tagline: 'Timeless greiges with crisp white trim',
@@ -212,7 +231,7 @@ function buildScheme(template, analysis, pool) {
     name: template.name,
     tagline: template.tagline,
     surfaces,
-    score: scoreScheme({ catalogFitLoss, scoredRoles, resolvedPaints }),
+    score: scoreScheme({ catalogFitLoss, scoredRoles, resolvedPaints, templateId: template.id, house }),
   };
 }
 
@@ -223,7 +242,7 @@ function buildScheme(template, analysis, pool) {
 // deliver real contrast between the primary wall and trim/doors (a scheme
 // where the "trim" is barely distinguishable from the wall reads as one flat
 // color, not a scheme — this is the brief's "contrast validation" step).
-function scoreScheme({ catalogFitLoss, scoredRoles, resolvedPaints }) {
+function scoreScheme({ catalogFitLoss, scoredRoles, resolvedPaints, templateId, house }) {
   // LAB distance of ~0 is a perfect catalog match; ~40+ is a poor one.
   // Normalize to 0..1 (higher is better) and average across scored roles.
   const avgLoss = scoredRoles > 0 ? catalogFitLoss / scoredRoles : 40;
@@ -245,7 +264,17 @@ function scoreScheme({ catalogFitLoss, scoredRoles, resolvedPaints }) {
     }
   }
 
-  return round3(0.65 * catalogFitScore + 0.35 * contrastScore);
+  // House-context affinity: a light nudge (15% weight) toward templates that
+  // fit the house's own material/style, e.g. brick leans earthy/heritage
+  // over coastal. Deliberately the smallest-weighted term — catalog fit and
+  // contrast are grounded in this house's actual masks and this dealer's
+  // actual catalog; style affinity is a softer, more subjective signal.
+  const affinity = STYLE_AFFINITY[templateId] || {};
+  const materialBonus = (house?.material && affinity.material?.[house.material]) || 0;
+  const styleBonus = (house?.style && affinity.style?.[house.style]) || 0;
+  const contextScore = clamp(0.5 + (materialBonus + styleBonus) / 2, 0, 1);
+
+  return round3(0.55 * catalogFitScore + 0.3 * contrastScore + 0.15 * contextScore);
 }
 
 function round3(v) {
@@ -290,4 +319,8 @@ function filterPool(paints, productLines) {
   return filtered.length ? filtered : paints;
 }
 
-module.exports = { id: ID, version: VERSION, supports, run };
+// ROLE_BY_CLASS/filterPool are also reused by hfSchemeProvider.js, which
+// needs the identical detected-surface -> role mapping and catalog
+// pre-filtering — duplicating either would let the two providers silently
+// drift apart on which surfaces map to which role.
+module.exports = { id: ID, version: VERSION, supports, run, ROLE_BY_CLASS, ROLE_ORDER, filterPool };

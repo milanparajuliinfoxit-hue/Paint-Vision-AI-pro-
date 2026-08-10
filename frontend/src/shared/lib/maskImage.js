@@ -44,10 +44,36 @@ export async function loadMaskImageData(url, width, height, signal) {
 
 // The alpha channel only, flattened to a Uint8Array of length width*height —
 // used as the brush constraint (surface lock) and for hit-testing surfaces.
-export async function loadAlphaGrid(url, width, height) {
+// Both callers (useSurfaceConstraintAlpha, useSurfaceAlphaGrids) commonly
+// load the *same* mask at the *same* canvas resolution independently, and
+// this re-decodes on every asset-analysis refetch (e.g. each AI pipeline
+// status transition) — cached, bounded by an LRU cap so it can't grow
+// unbounded across a long session.
+//
+// `versionKey` (typically the analysis/job id) matters because a
+// re-analysis overwrites the same mask_path filename with new content — the
+// URL string alone doesn't change, so without a version component in the
+// cache key this would keep serving the *previous* analysis's mask forever.
+const alphaGridCache = new Map();
+const ALPHA_GRID_CACHE_LIMIT = 48;
+
+export async function loadAlphaGrid(url, width, height, versionKey = '') {
+  const key = `${url}@${width}x${height}@${versionKey}`;
+  const cached = alphaGridCache.get(key);
+  if (cached) {
+    alphaGridCache.delete(key);
+    alphaGridCache.set(key, cached); // touch -> most-recently-used
+    return cached;
+  }
+
   const data = (await loadMaskImageData(url, width, height)).data;
   const grid = new Uint8Array(width * height);
   for (let i = 0; i < grid.length; i++) grid[i] = data[i * 4 + 3];
+
+  alphaGridCache.set(key, grid);
+  if (alphaGridCache.size > ALPHA_GRID_CACHE_LIMIT) {
+    alphaGridCache.delete(alphaGridCache.keys().next().value);
+  }
   return grid;
 }
 

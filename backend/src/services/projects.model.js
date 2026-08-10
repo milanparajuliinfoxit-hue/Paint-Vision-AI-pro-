@@ -79,4 +79,41 @@ async function updateProject(id, patch = {}, expectedUpdatedAt) {
   return getProject(id);
 }
 
-module.exports = { createProject, getProject, listProjects, updateProject };
+// Separate from updateProject/FIELD_MAP on purpose: undo/redo/jump can fire
+// several times a second while a dealer scrubs the History tab, and running
+// that through the optimistic-concurrency PATCH (Section 7) would either
+// force the client to refetch updated_at between every keystroke or throw
+// spurious 409s. This is a best-effort UI bookmark, not authoritative layer
+// state (the layer mutations undo/redo actually perform are what's
+// authoritative) — last-write-wins is fine. `updated_at = updated_at`
+// explicitly re-asserts the current value so the ON UPDATE CURRENT_TIMESTAMP
+// trigger doesn't fire and desync the real PATCH endpoint's conflict check.
+async function setUndoPointer(id, pointer) {
+  await pool.query('UPDATE projects SET undo_pointer = ?, updated_at = updated_at WHERE id = ?', [pointer, id]);
+  return getProject(id);
+}
+
+// Deleting a project is one transaction because assets.project_id is ON
+// DELETE SET NULL (schema.sql): dropping just the project row would orphan
+// every photo, and layers/ai_jobs/detected_*/paint_recommendations all
+// cascade off the asset rows. So assets go first, then the project row —
+// history_entries/concepts/export_jobs/paint_recommendations CASCADE off
+// the project row itself. Disk cleanup is the route's job (same split as
+// assets.controller.js's deleteAsset).
+async function deleteProject(id) {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.query('DELETE FROM assets WHERE project_id = ?', [id]);
+    const [result] = await connection.query('DELETE FROM projects WHERE id = ?', [id]);
+    await connection.commit();
+    return result.affectedRows > 0;
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
+}
+
+module.exports = { createProject, getProject, listProjects, updateProject, setUndoPointer, deleteProject };

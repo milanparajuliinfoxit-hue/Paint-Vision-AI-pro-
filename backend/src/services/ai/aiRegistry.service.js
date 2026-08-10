@@ -8,17 +8,28 @@
  * frontend are untouched.
  *
  * Capabilities:
- *   'house-understanding'  -> structured house/surface/object understanding
- *   'paint-recommendation' -> catalog-only paint scheme generation
+ *   'house-understanding'  -> structured house/surface/object understanding.
+ *                             No production provider is registered right now
+ *                             — the local Grounding DINO + SAM2 service was
+ *                             removed (no remote replacement has been
+ *                             verified to work yet; see .env's comment on
+ *                             AI_ANALYSIS_ENABLED). houseUnderstanding
+ *                             .service.js's disabled-capability check stops
+ *                             requests before they'd ever reach here.
+ *   'paint-recommendation' -> catalog-only paint scheme generation, or a
+ *                             real hosted-LLM scheme generator (hf-scheme).
+ *
+ * mockProvider.js deliberately is NOT registered here — it's retained only
+ * as an unreachable-from-production fixture (see its own file header). A
+ * capability with no registered provider fails loudly via getProviderFor
+ * below, not by silently picking a heuristic.
  */
 const aiConfig = require('../../config/aiConfig');
 const aiResult = require('./aiResult');
-const mockProvider = require('./providers/mockProvider');
-const httpVisionProvider = require('./providers/httpVisionProvider');
-const hfVisionProvider = require('./providers/hfVisionProvider');
 const catalogRecommendationProvider = require('./providers/catalogRecommendationProvider');
+const hfSchemeProvider = require('./providers/hfSchemeProvider');
 
-const PROVIDERS = [mockProvider, httpVisionProvider, hfVisionProvider, catalogRecommendationProvider];
+const PROVIDERS = [catalogRecommendationProvider, hfSchemeProvider];
 
 function getProviderFor(capability) {
   const configured = aiConfig.getProviderFor(capability);
@@ -49,9 +60,15 @@ function getProviderVersion(capability) {
  * Always resolves to an aiResult envelope — never throws for provider failures.
  */
 async function run(capability, input) {
-  const provider = getProviderFor(capability);
   const started = Date.now();
+  let provider;
   try {
+    // Moved inside the try: getProviderFor throws for an unregistered/
+    // unsupported provider id, and with local AI removed that's now a real
+    // misconfiguration to guard (e.g. AI_ANALYSIS_PROVIDER still set to a
+    // deleted provider) — previously that throw escaped run() entirely,
+    // contradicting this function's own "never throws" contract below.
+    provider = getProviderFor(capability);
     const result = await provider.run(capability, input);
     return aiResult.ok(result.output, {
       provider: provider.id,
@@ -61,8 +78,8 @@ async function run(capability, input) {
     });
   } catch (err) {
     return aiResult.fail(err, {
-      provider: provider.id,
-      modelVersion: provider.version,
+      provider: provider?.id ?? aiConfig.getProviderFor(capability),
+      modelVersion: provider?.version ?? null,
       processingTimeMs: Date.now() - started,
     });
   }

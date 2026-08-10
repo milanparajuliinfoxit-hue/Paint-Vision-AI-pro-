@@ -1,6 +1,7 @@
 import { useLayersList } from './useLayers';
 import { useHistoryCommand } from './useHistoryCommand';
 import { useVisualizerStore } from '../store/visualizerStore';
+import { canRecolorActiveLayer as computeCanRecolor } from './colorOwnership';
 
 // Shared "pick a catalog color" behavior for every color-browsing panel
 // (Catalog/Favorites/Brands/Collections tabs, and the tool inspector):
@@ -12,14 +13,20 @@ export function useApplyColor(projectId, assetId) {
   const { data: layerList = [] } = useLayersList(assetId);
   const { commit } = useHistoryCommand(projectId, assetId);
   const activeLayerId = useVisualizerStore((s) => s.activeLayerId);
+  const layerSelectedExplicitly = useVisualizerStore((s) => s.layerSelectedExplicitly);
   const setPendingColor = useVisualizerStore((s) => s.setPendingColor);
   const setHoverPreviewColorRgb = useVisualizerStore((s) => s.setHoverPreviewColorRgb);
   const activeLayer = layerList.find((l) => l.id === activeLayerId);
+  // A layer can be "active" merely because it's the implicit paint-
+  // continuation target right after being created — that must not count as
+  // authorization to recolor it. Only a deliberate Layers/Finishes panel
+  // click (selectLayer) does.
+  const canRecolorActiveLayer = computeCanRecolor(activeLayer, layerSelectedExplicitly);
 
   function pickColor(paint) {
     setPendingColor(paint.id, { r: paint.r_value, g: paint.g_value, b: paint.b_value });
     setHoverPreviewColorRgb(null);
-    if (activeLayer) {
+    if (canRecolorActiveLayer) {
       commit({
         action: 'color-applied',
         layerId: activeLayer.id,
@@ -33,5 +40,5 @@ export function useApplyColor(projectId, assetId) {
     setHoverPreviewColorRgb(paint ? { r: paint.r_value, g: paint.g_value, b: paint.b_value } : null);
   }
 
-  return { pickColor, hoverColor, activeLayer };
+  return { pickColor, hoverColor, activeLayer, canRecolorActiveLayer };
 }

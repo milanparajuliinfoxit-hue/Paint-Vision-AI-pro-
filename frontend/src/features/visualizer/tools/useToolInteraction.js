@@ -16,8 +16,13 @@ import { rgbToLab } from '../../../shared/lib/colorEngine';
 // `surfaceMasks` (from useSurfaceAlphaGrids) backs the surface-pick tool: a
 // click resolves to the paintable surface under the cursor and is handed to
 // onSurfacePick, which paints the whole surface as an idempotent AI layer.
+// `houseAlpha` (optional Uint8Array, full image size) is the union of every
+// AI-detected surface's mask — when present, Magic Wand's flood fill can
+// never cross outside it, however close the colors are on either side
+// (house-aware selection). Absent when no analysis has been run yet; the
+// tool still falls back to its own boundary-aware color/step tolerance.
 export function useToolInteraction({
-  width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha, surfaceMasks, onSurfacePick,
+  width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha, surfaceMasks, onSurfacePick, houseAlpha,
 }) {
   const activeTool = useVisualizerStore((s) => s.activeTool);
   const brushMode = useVisualizerStore((s) => s.brushMode);
@@ -122,8 +127,11 @@ export function useToolInteraction({
         if (!baseImageData) return;
         const x = Math.min(width - 1, Math.max(0, Math.round(pt.x)));
         const y = Math.min(height - 1, Math.max(0, Math.round(pt.y)));
-        const mask = floodFillMask(baseImageData, x, y, magicWandTolerance, rgbToLab);
-        onCommitMask(mask, 'magic-wand', {});
+        const mask = floodFillMask(baseImageData, x, y, magicWandTolerance, rgbToLab, { houseAlpha });
+        // clickX/clickY let handleCommitMask independently validate the click
+        // itself landed on the house (Section 12) — not just that some mask
+        // came back non-empty. tolerance is passed through purely for logging.
+        onCommitMask(mask, 'magic-wand', { clickX: x, clickY: y, tolerance: magicWandTolerance });
         break;
       }
       case 'eyedropper':
@@ -155,7 +163,18 @@ export function useToolInteraction({
       onCommitMask(mask, 'lasso', {});
       reset();
     } else if (activeTool === 'eraser' && brushPointsRef.current.length > 0) {
-      const strokeMask = rasterizeBrushStroke(width, height, brushPointsRef.current, brushSize);
+      // feather: 0 — a feathered stroke never reaches full (255) alpha right
+      // at its own edge, so subtracting it can never zero out a layer's mask
+      // no matter how thoroughly the user drags over it: the emptiness check
+      // downstream (isMaskEmpty) would keep finding a faint residual rim
+      // forever, and the layer would never auto-delete even when the erase
+      // is visually complete. A full-strength stroke has no such floor —
+      // subtracting 255 from any existing alpha always reaches exactly 0
+      // wherever it's dragged, regardless of how soft the *painted* mask's
+      // own edges are (surfaceAwareBrushStroke already uses the same
+      // feather: 0 footprint for an unrelated reason; same parameter, this
+      // is just a second real use for it).
+      const strokeMask = rasterizeBrushStroke(width, height, brushPointsRef.current, brushSize, { feather: 0 });
       onCommitMask(strokeMask, 'eraser', {});
       reset();
     } else if (activeTool === 'brush' && brushPointsRef.current.length > 0) {
