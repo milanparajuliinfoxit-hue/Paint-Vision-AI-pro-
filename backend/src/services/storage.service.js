@@ -53,9 +53,20 @@ function deleteDirIfEmpty(relativeDir) {
   if (fs.existsSync(full) && fs.readdirSync(full).length === 0) fs.rmdirSync(full);
 }
 
+// Directory layout, in one place — controllers name what they're storing
+// instead of re-joining path segments at each call site.
+// UPLOAD_ROOT already ends in the app's uploads folder, so an asset's own
+// files need no extra nesting.
+const assetDir = (assetId) => String(assetId);
+const maskDir = (assetId) => path.join('uploads', String(assetId), 'masks');
+const projectDir = (projectId, subfolder) => path.join('uploads', 'projects', String(projectId), subfolder);
+
 module.exports = {
   UPLOAD_ROOT,
   ensureDir,
+  assetDir,
+  maskDir,
+  projectDir,
   absolutePath,
   saveBuffer,
   readFile,

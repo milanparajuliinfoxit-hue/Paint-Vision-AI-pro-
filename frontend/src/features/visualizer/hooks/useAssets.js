@@ -1,50 +1,39 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { assets } from '../../../shared/lib/api';
+import { useInvalidatingMutation } from '../../../shared/lib/useInvalidatingMutation';
+
+const assetsKey = (projectId) => ['assets', projectId];
 
 export function useAssetsList(projectId) {
   return useQuery({
-    queryKey: ['assets', projectId],
+    queryKey: assetsKey(projectId),
     queryFn: () => assets.list(projectId),
     enabled: !!projectId,
   });
 }
 
 export function useUploadAsset(projectId) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (file) => assets.upload(projectId, file),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['assets', projectId] }),
-  });
+  return useInvalidatingMutation((file) => assets.upload(projectId, file), assetsKey(projectId));
 }
 
 export function useCleanAsset(projectId) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ assetId, maskBlob }) => assets.clean(assetId, maskBlob),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['assets', projectId] }),
-  });
+  return useInvalidatingMutation(
+    ({ assetId, maskBlob }) => assets.clean(assetId, maskBlob),
+    assetsKey(projectId)
+  );
 }
 
 export function useRenameAsset(projectId) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ assetId, label }) => assets.rename(assetId, label),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['assets', projectId] }),
-  });
+  return useInvalidatingMutation(
+    ({ assetId, label }) => assets.rename(assetId, label),
+    assetsKey(projectId)
+  );
 }
 
 export function useDeleteAsset(projectId) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (assetId) => assets.remove(assetId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['assets', projectId] }),
-  });
+  return useInvalidatingMutation((assetId) => assets.remove(assetId), assetsKey(projectId));
 }
 
 export function useDuplicateAsset(projectId) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (assetId) => assets.duplicate(assetId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['assets', projectId] }),
-  });
+  return useInvalidatingMutation((assetId) => assets.duplicate(assetId), assetsKey(projectId));
 }

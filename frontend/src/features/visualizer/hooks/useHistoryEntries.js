@@ -1,18 +1,17 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { history } from '../../../shared/lib/api';
+import { useInvalidatingMutation } from '../../../shared/lib/useInvalidatingMutation';
+
+const historyKey = (projectId) => ['history', projectId];
 
 export function useHistoryList(projectId) {
   return useQuery({
-    queryKey: ['history', projectId],
+    queryKey: historyKey(projectId),
     queryFn: () => history.list(projectId),
     enabled: !!projectId,
   });
 }
 
 export function useAppendHistory(projectId) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (entry) => history.append(projectId, entry),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['history', projectId] }),
-  });
+  return useInvalidatingMutation((entry) => history.append(projectId, entry), historyKey(projectId));
 }

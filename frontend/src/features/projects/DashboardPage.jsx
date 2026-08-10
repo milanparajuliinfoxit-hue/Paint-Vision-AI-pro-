@@ -6,6 +6,7 @@ import CreateProjectModal from './CreateProjectModal';
 import StatusBadge from './statusBadge';
 import ProjectCover from './ProjectCover';
 import { Button } from '../../shared/ui/button';
+import { formatShortDate } from '../../shared/lib/formatDate';
 
 const STATS = [
   { key: 'total', label: 'Total projects', Icon: FolderKanban, tint: 'bg-[var(--signal)]/10 text-[var(--signal)]' },
@@ -13,10 +14,6 @@ const STATS = [
   { key: 'approved', label: 'Client approved', Icon: CheckCircle2, tint: 'bg-[var(--success)]/10 text-[var(--success)]' },
   { key: 'drafts', label: 'Drafts', Icon: PenLine, tint: 'bg-[var(--graphite)]/10 text-[var(--graphite-dark)]' },
 ];
-
-function formatDate(iso) {
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
 
 export default function DashboardPage() {
   const [showCreate, setShowCreate] = useState(false);
@@ -133,7 +130,7 @@ export default function DashboardPage() {
                   <div className="mt-2 truncate font-semibold">{p.name || p.client_name}</div>
                   <div className="mt-0.5 truncate text-sm text-[var(--graphite)]">{p.client_name}</div>
                   <div className="mt-3 flex items-center justify-between text-xs text-[var(--graphite)]">
-                    <span>Updated {formatDate(p.updated_at)}</span>
+                    <span>Updated {formatShortDate(p.updated_at)}</span>
                     <ArrowRight size={14} className="text-[var(--graphite)] transition-all group-hover:translate-x-0.5 group-hover:text-[var(--signal)]" />
                   </div>
                 </div>

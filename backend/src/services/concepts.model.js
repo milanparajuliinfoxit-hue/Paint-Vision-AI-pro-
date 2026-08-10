@@ -1,20 +1,16 @@
 const pool = require('../config/db');
+const { findById, listByColumn } = require('./db.helpers');
 
 async function createConcept({ projectId, name, thumbnailPath, layerColorMap }) {
   const [result] = await pool.query(
     'INSERT INTO concepts (project_id, name, thumbnail_path, layer_color_map) VALUES (?, ?, ?, ?)',
     [projectId, name, thumbnailPath || null, layerColorMap !== undefined ? JSON.stringify(layerColorMap) : null]
   );
-  const [rows] = await pool.query('SELECT * FROM concepts WHERE id = ?', [result.insertId]);
-  return rows[0];
+  return findById('concepts', result.insertId);
 }
 
-async function listForProject(projectId) {
-  const [rows] = await pool.query(
-    'SELECT * FROM concepts WHERE project_id = ? ORDER BY created_at DESC',
-    [projectId]
-  );
-  return rows;
+function listForProject(projectId) {
+  return listByColumn('concepts', 'project_id', projectId, 'created_at DESC');
 }
 
 module.exports = { createConcept, listForProject };

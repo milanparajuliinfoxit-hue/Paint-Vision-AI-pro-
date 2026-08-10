@@ -24,7 +24,7 @@ export default function BrandsTab({ projectId, assetId }) {
   );
 
   function pick(paint) {
-    markRecentlyUsed({ id: paint.id, color_name: paint.color_name, color_code: paint.color_code, hex_value: paint.hex_value });
+    markRecentlyUsed(paint);
     pickColor(paint);
   }
 

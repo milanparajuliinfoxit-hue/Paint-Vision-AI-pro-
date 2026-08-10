@@ -86,6 +86,10 @@ export function hexToRgb(hex) {
   };
 }
 
+export function rgbToHex(r, g, b) {
+  return '#' + [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+}
+
 export function labDistance(a, b) {
   return Math.sqrt((a.l - b.l) ** 2 + (a.a - b.a) ** 2 + (a.b - b.b) ** 2);
 }

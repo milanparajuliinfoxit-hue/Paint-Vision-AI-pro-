@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { useVisualizerStore } from '../store/visualizerStore';
 import { rasterizeRect, rasterizePolygon, rasterizeBrushStroke, surfaceAwareBrushStroke, floodFillMask } from './maskOps';
 import { rgbToLab } from '../../../shared/lib/colorEngine';
+import { canvasFromImageData } from '../../../shared/lib/canvas';
 
 // Owns the transient, in-progress interaction for whichever tool is active
 // (drag rect, lasso path, polygon points, brush stroke). Selection tools all
@@ -73,11 +74,7 @@ export function useToolInteraction({ width, height, baseImageData, onCommitMask,
     if (now - lastPreviewAt.current < 150) return;
     lastPreviewAt.current = now;
     const mask = surfaceAwareBrushStroke(baseImageData, width, height, nextPoints, brushSize, surfaceTolerance, rgbToLab);
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    canvas.getContext('2d').putImageData(mask, 0, 0);
-    setPreviewCanvas(canvas);
+    setPreviewCanvas(canvasFromImageData(mask));
   }
 
   function handlePointerDown(pt, evt) {

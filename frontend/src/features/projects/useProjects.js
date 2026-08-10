@@ -1,5 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { projects } from '../../shared/lib/api';
+import { useInvalidatingMutation } from '../../shared/lib/useInvalidatingMutation';
 
 export function useProjectsList(params = {}) {
   return useQuery({
@@ -17,20 +18,14 @@ export function useProject(projectId) {
 }
 
 export function useCreateProject() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (data) => projects.create(data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects'] }),
-  });
+  return useInvalidatingMutation((data) => projects.create(data), ['projects']);
 }
 
 export function useUpdateProject(projectId) {
   const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ patch, updatedAt }) => projects.update(projectId, patch, updatedAt),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(['project', projectId], updated);
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-    },
-  });
+  return useInvalidatingMutation(
+    ({ patch, updatedAt }) => projects.update(projectId, patch, updatedAt),
+    ['projects'],
+    { onSuccess: (updated) => queryClient.setQueryData(['project', projectId], updated) }
+  );
 }

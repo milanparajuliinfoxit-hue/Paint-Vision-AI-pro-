@@ -1,9 +1,9 @@
 const express = require('express');
-const multer = require('multer');
 const router = express.Router();
+const { memoryUpload } = require('../middleware/upload.middleware');
 const ctrl = require('../controllers/importExport.controller');
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = memoryUpload(10);
 
 router.post('/preview', upload.single('file'), ctrl.previewImport);
 router.post('/commit', ctrl.commitImport);

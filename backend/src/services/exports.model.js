@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { findById, listByColumn } = require('./db.helpers');
 
 async function createExportJob({ projectId, format, comparisonMode }) {
   const [result] = await pool.query(
@@ -8,17 +9,12 @@ async function createExportJob({ projectId, format, comparisonMode }) {
   return getExportJob(result.insertId);
 }
 
-async function getExportJob(id) {
-  const [rows] = await pool.query('SELECT * FROM export_jobs WHERE id = ?', [id]);
-  return rows[0] || null;
+function getExportJob(id) {
+  return findById('export_jobs', id);
 }
 
-async function listForProject(projectId) {
-  const [rows] = await pool.query(
-    'SELECT * FROM export_jobs WHERE project_id = ? ORDER BY created_at DESC',
-    [projectId]
-  );
-  return rows;
+function listForProject(projectId) {
+  return listByColumn('export_jobs', 'project_id', projectId, 'created_at DESC');
 }
 
 async function markReady(id, filePath) {

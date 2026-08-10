@@ -1,16 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
+import { readJson, writeJson } from '../../shared/lib/localStore';
 
 const FAVORITES_KEY = 'catalog-favorites';
 const RECENT_KEY = 'catalog-recently-used';
 const RECENT_LIMIT = 8;
-
-function readJson(key, fallback) {
-  try {
-    return JSON.parse(localStorage.getItem(key)) ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
 
 // Favorites/recently-used are spec'd as "per-user, persisted" (requirements
 // doc, Section 6.1) — there's no auth in this app (per-project decision), so
@@ -23,11 +16,11 @@ export function useFavorites() {
   const [recentPaints, setRecentPaints] = useState(() => readJson(RECENT_KEY, []));
 
   useEffect(() => {
-    localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favoriteIds]));
+    writeJson(FAVORITES_KEY, [...favoriteIds]);
   }, [favoriteIds]);
 
   useEffect(() => {
-    localStorage.setItem(RECENT_KEY, JSON.stringify(recentPaints));
+    writeJson(RECENT_KEY, recentPaints);
   }, [recentPaints]);
 
   const toggleFavorite = useCallback((paintId) => {
@@ -39,8 +32,16 @@ export function useFavorites() {
     });
   }, []);
 
+  // Stores only the fields a swatch needs so the persisted list stays small
+  // and every caller records the same shape.
   const markRecentlyUsed = useCallback((paint) => {
-    setRecentPaints((prev) => [paint, ...prev.filter((p) => p.id !== paint.id)].slice(0, RECENT_LIMIT));
+    const entry = {
+      id: paint.id,
+      color_name: paint.color_name,
+      color_code: paint.color_code,
+      hex_value: paint.hex_value,
+    };
+    setRecentPaints((prev) => [entry, ...prev.filter((p) => p.id !== entry.id)].slice(0, RECENT_LIMIT));
   }, []);
 
   return {
