@@ -277,7 +277,7 @@ CLIPDROP_CLEANUP_URL=https://clipdrop-api.co/cleanup/v1
 
 #### Hugging Face Configuration
 ```bash
-HF_API_KEY=REDACTED_HF_API_KEY
+HF_API_KEY=replace-with-real-key
 HF_MODEL=fal-ai/fal-ai/flux-2/klein/9b/edit
 HF_API_URL=https://router.huggingface.co/fal-ai/fal-ai/flux-2/klein/9b/edit
 HF_INPUT_MODE=json
