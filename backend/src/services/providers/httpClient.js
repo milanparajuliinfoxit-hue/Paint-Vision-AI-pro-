@@ -51,6 +51,53 @@ async function fetchWithTimeout(url, options, timeoutMs) {
   }
 }
 
+const DEFAULT_MAX_BYTES = 25 * 1024 * 1024; // matches the app's largest multer upload cap
+
+// GET with timeout + a hard response-size cap, for the one place a provider
+// response hands back a URL for us to fetch (huggingface.js's
+// fetchRemoteImage) rather than the image bytes directly. That URL is
+// attacker-influenced if a provider endpoint is ever compromised or
+// misbehaves, and without a cap here the Authorization header (the HF key)
+// would be sent to whatever host it names with no timeout and no bound on
+// how much it could make us download.
+async function getWithLimits(url, { headers, timeoutMs = DEFAULT_TIMEOUT_MS, maxBytes = DEFAULT_MAX_BYTES, provider, model } = {}) {
+  const response = await fetchWithTimeout(url, { method: 'GET', headers }, timeoutMs);
+  if (!response.ok) {
+    throw new ProviderError(`Failed to download resource from ${url} (HTTP ${response.status})`, { provider, model });
+  }
+
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new ProviderError(`Resource at ${url} exceeds the ${maxBytes}-byte limit (declared ${declaredLength} bytes)`, { provider, model });
+  }
+
+  // Enforced during the stream, not just via Content-Length (which a server
+  // can omit or lie about) — the cap actually bounds memory even against a
+  // response with no declared length.
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > maxBytes) {
+      throw new ProviderError(`Resource at ${url} exceeds the ${maxBytes}-byte limit`, { provider, model });
+    }
+    return buffer;
+  }
+
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new ProviderError(`Resource at ${url} exceeds the ${maxBytes}-byte limit`, { provider, model });
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
 async function extractErrorDetail(response) {
   const text = await response.text().catch(() => '');
   if (!text) return '';
@@ -118,8 +165,10 @@ async function post({ url, headers, body, provider, model, timeoutMs = DEFAULT_T
 
 module.exports = {
   post,
+  getWithLimits,
   ProviderError,
   DEFAULT_TIMEOUT_MS,
+  DEFAULT_MAX_BYTES,
   MAX_RETRIES,
   RETRYABLE_STATUSES,
 };

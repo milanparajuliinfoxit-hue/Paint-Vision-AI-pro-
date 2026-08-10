@@ -4,7 +4,10 @@ import {
   useAssetsList, useUploadAsset, useCleanAsset, useRenameAsset, useDeleteAsset, useDuplicateAsset,
 } from '../hooks/useAssets';
 import { useLayersList } from '../hooks/useLayers';
-import { assets as assetsApi, concepts as conceptsApi, exportsApi } from '../../../shared/lib/api';
+import { useAssetAnalysis } from '../hooks/useAiAnalysis';
+import { useStartAiPipeline } from '../hooks/useAiPipeline';
+import { useApplyConcept, useConcepts } from '../hooks/useConcepts';
+import { assets as assetsApi, exportsApi } from '../../../shared/lib/api';
 import { Button } from '../../../shared/ui/button';
 import { useToast } from '../../../shared/ui/toast';
 import { useVisualizerStore } from '../store/visualizerStore';
@@ -37,21 +40,20 @@ function Section({ title, count, defaultOpen = true, children }) {
   );
 }
 
-export default function AssetsTab({ projectId, activeAssetId, onSelectAsset }) {
+export default function AssetsTab({ projectId, activeAssetId, onSelectAsset, width, height }) {
   const fileInputRef = useRef(null);
   const setCompareState = useVisualizerStore((s) => s.setCompareState);
   const { data: assetList = [] } = useAssetsList(projectId);
   const uploadAsset = useUploadAsset(projectId);
+  const startAiPipeline = useStartAiPipeline();
   const cleanAsset = useCleanAsset(projectId);
   const renameAsset = useRenameAsset(projectId);
   const deleteAsset = useDeleteAsset(projectId);
   const duplicateAsset = useDuplicateAsset(projectId);
   const { data: layerList = [] } = useLayersList(activeAssetId);
-  const { data: conceptList = [] } = useQuery({
-    queryKey: ['concepts', projectId],
-    queryFn: () => conceptsApi.list(projectId),
-    enabled: !!projectId,
-  });
+  const { data: conceptList = [] } = useConcepts(projectId);
+  const { data: analysis } = useAssetAnalysis(activeAssetId);
+  const { applyConcept } = useApplyConcept(projectId, activeAssetId, { width, height });
   const { data: exportList = [] } = useQuery({
     queryKey: ['exports', projectId],
     queryFn: () => exportsApi.list(projectId),
@@ -62,6 +64,21 @@ export default function AssetsTab({ projectId, activeAssetId, onSelectAsset }) {
   const [renamingAsset, setRenamingAsset] = useState(null); // asset object or null
   const [deletingAsset, setDeletingAsset] = useState(null);
 
+  const surfacesByClass = new Map((analysis?.surfaces || []).map((s) => [s.class_key, s]));
+
+  async function handleApplyConcept(concept) {
+    try {
+      if (!analysis?.analyzed) {
+        showToast('Run AI analysis on this photo first — concepts need the detected surfaces.', { variant: 'danger' });
+        return;
+      }
+      const layer = await applyConcept(concept, surfacesByClass);
+      showToast(layer ? `Applied "${concept.name}" as editable layers.` : 'Nothing to apply — no paintable surfaces match this photo.');
+    } catch (err) {
+      showToast(err.message || 'Could not apply concept.', { variant: 'danger' });
+    }
+  }
+
   const cleanedAssets = assetList.filter((a) => a.cleaned_path);
   const masksForActiveAsset = layerList.filter((l) => l.mask_path);
 
@@ -71,6 +88,13 @@ export default function AssetsTab({ projectId, activeAssetId, onSelectAsset }) {
     try {
       const asset = await uploadAsset.mutateAsync(file);
       onSelectAsset(asset.id);
+      // Fire the autonomous pipeline (house-understanding -> schemes) right
+      // after upload instead of waiting for a manual "Analyze" click. Not
+      // awaited — the pipeline runs server-side and the dealer keeps working;
+      // AiPipelineStatusBar (polling ai/status) surfaces progress. A failure
+      // to *start* it (e.g. a network blip) isn't an upload failure and
+      // isn't shown as one — the "Try again" affordance covers recovery.
+      startAiPipeline.mutate({ assetId: asset.id });
     } catch (err) {
       showToast(`Upload failed: ${err.message}`, { variant: 'danger' });
     }
@@ -79,8 +103,12 @@ export default function AssetsTab({ projectId, activeAssetId, onSelectAsset }) {
 
   async function handleCleanup(assetId) {
     try {
-      await cleanAsset.mutateAsync({ assetId });
-      showToast('Cleanup complete.');
+      const result = await cleanAsset.mutateAsync({ assetId });
+      if (result.cleanupRejected) {
+        showToast(result.error_message || 'Cleanup was skipped to protect the house — original photo kept.', { variant: 'danger' });
+      } else {
+        showToast('Cleanup complete.');
+      }
     } catch (err) {
       showToast(`Cleanup failed: ${err.message} — you can keep working with the original photo.`, { variant: 'danger' });
     }
@@ -132,7 +160,13 @@ export default function AssetsTab({ projectId, activeAssetId, onSelectAsset }) {
         </div>
         <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px]">
           {!asset.cleaned_path && asset.status !== 'cleaning' && (
-            <button className="text-[var(--signal)] hover:underline" onClick={() => handleCleanup(asset.id)}>Run AI cleanup</button>
+            <button
+              className="text-[var(--signal)] hover:underline"
+              title="If this photo has been analyzed, automatically removes detected trees, cars, people, and fences — house surfaces are never touched."
+              onClick={() => handleCleanup(asset.id)}
+            >
+              Run AI cleanup
+            </button>
           )}
           <button className="text-[var(--graphite)] hover:underline" onClick={() => setRenamingAsset(asset)}>Rename</button>
           <button className="text-[var(--graphite)] hover:underline" onClick={() => handleDuplicate(asset)}>Duplicate</button>
@@ -186,15 +220,21 @@ export default function AssetsTab({ projectId, activeAssetId, onSelectAsset }) {
 
       <Section title="Painted (saved looks)" count={conceptList.length} defaultOpen={false}>
         {conceptList.length === 0 ? (
-          <p className="text-xs text-[var(--graphite)] px-1">Save a Concept from the canvas toolbar to see painted looks here.</p>
+          <p className="text-xs text-[var(--graphite)] px-1">
+            Save a scheme from the AI Schemes tab to see painted looks here — each one re-applies as
+            real, editable layers on any analyzed photo.
+          </p>
         ) : (
           <ul className="flex flex-col gap-1 px-1">
             {conceptList.map((c) => (
               <li key={c.id} className="flex items-center gap-2 text-xs">
                 {c.thumbnail_path && (
-                  <img src={assetsApi.fileUrl(c.thumbnail_path)} alt="" className="w-6 h-6 rounded-[var(--radius-sm)] border border-[var(--line)] object-cover" />
+                  <img src={assetsApi.fileUrl(c.thumbnail_path)} alt="" className="w-8 h-8 rounded-[var(--radius-sm)] border border-[var(--line)] object-cover shrink-0" />
                 )}
-                <span className="truncate">{c.name}</span>
+                <span className="truncate flex-1">{c.name}</span>
+                <button className="text-[var(--signal)] hover:underline shrink-0" onClick={() => handleApplyConcept(c)}>
+                  Apply
+                </button>
               </li>
             ))}
           </ul>

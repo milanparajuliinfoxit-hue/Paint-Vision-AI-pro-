@@ -10,12 +10,15 @@ for the full product/engineering spec this implements.
 ## Architecture
 
 ```
-frontend (React/Vite, Konva canvas)  ──HTTP──▶  backend (Express)  ──HTTP──▶  hosted AI API (cleanup)
+frontend (React/Vite, Konva canvas)  ──HTTP──▶  backend (Express)  ──HTTP──▶  hosted AI API (cleanup / vision)
         │                                            │
    layer compositing,                          MySQL (catalog, projects,
    client-side LAB recolor                     assets, layers, history,
-   (no server round trip)                       concepts, exports)
-                                                   + local /uploads
+   (no server round trip)                       concepts, exports,
+                                                ai_jobs, detected_surfaces,
+                                                detected_objects,
+                                                paint_recommendations)
+                                                    + local /uploads
 ```
 
 - **Client does the image work**, same as v1: applying a catalog color to a masked
@@ -23,10 +26,13 @@ frontend (React/Vite, Konva canvas)  ──HTTP──▶  backend (Express)  ─
   (`frontend/src/shared/lib/colorEngine.js`) that preserves the photo's shading/texture.
   Each `Layer` composites independently (Konva), so changing one layer's color
   re-renders only that layer, not the whole canvas.
-- **Server = storage + a thin AI proxy**, unchanged in spirit: plain CRUD (catalog,
-  projects, assets, layers, history, concepts, exports) backed by MySQL plus local-disk
-  file storage. The only AI call is `POST /api/assets/:id/clean`, forwarded to a hosted
-  provider (Clipdrop/Hugging Face) — no image processing happens in this process.
+- **Server = storage + AI understanding + thin proxies**: plain CRUD (catalog, projects,
+  assets, layers, history, concepts, exports) backed by MySQL plus local-disk file storage,
+  plus two AI capabilities — house understanding (structured scene → detected surfaces/
+  objects + masks, default `mock` provider, in-process) and catalog-scored paint schemes.
+  The AI only produces structured understanding; applying paint always goes through the
+  existing layer/recolor pipeline. A separate hosted proxy (`POST /api/assets/:id/clean`)
+  forwards to Clipdrop/Hugging Face for cleanup.
 - **No auth/RBAC** — single-editor, no login, matching v1's model (explicit product
   decision for this phase; see `v2.md` §10 for the deferred role model).
 
@@ -34,7 +40,9 @@ frontend (React/Vite, Konva canvas)  ──HTTP──▶  backend (Express)  ─
 
 `projects` → `assets` (original + AI-cleaned photo) → `layers` (masked, re-colorable
 surface regions) — plus `history_entries` (undo/redo log), `concepts` (saved "looks"),
-and `export_jobs`. Full schema: `backend/src/sql/schema.sql`.
+`export_jobs`, and the AI tables (`ai_jobs` audit log, `detected_surfaces` /
+`detected_objects` with mask files, `paint_recommendations`). Full schema:
+`backend/src/sql/schema.sql`.
 
 ## What's implemented
 
@@ -51,12 +59,23 @@ and `export_jobs`. Full schema: `backend/src/sql/schema.sql`.
 | Comparison modes (side-by-side/slider/split/fade) + PNG/side-by-side-JPG export | ✅ working |
 | Keyboard shortcuts, ARIA live save/toast status, responsive breakpoints (full 3-pane ≥1280px, collapsed 768–1279px, read-only <768px) | ✅ working |
 | AI cleanup proxy | ⚠️ wired, needs a real provider API key — see `backend/.env.example` |
+| **AI House Understanding** — analyzes a photo into structured house/surface/object understanding; paintable surfaces become one-click layers; surface-lock brush keeps paint inside the detected surface | ✅ working (mock provider; `http-vision` drop-in) |
+| **AI Paint Recommendations** — 5–10 catalog-only schemes (primary wall, accents, trim, roof, gutter…) that apply as real, editable layers | ✅ working (rule-based `catalog` provider) |
+
+### AI on by default, no key needed
+Both AI capabilities ship with **provider-less defaults** (see `AI_UNDERSTANDING_SPEC.md`):
+- House understanding uses the **`mock`** provider (pure heuristic image understanding via
+  `jimp`, already a backend dependency) — zero API keys, zero network calls.
+- Paint recommendations use the **`catalog`** provider (rule-based color theory scored against
+  paints already in your catalog) — colors are always real products, never invented.
+- Set `AI_ANALYSIS_PROVIDER=http-vision` (and `AI_VISION_URL`/`AI_VISION_API_KEY`) to plug in a
+  real segmentation vendor; the response schema is identical to the mock's, so providers are
+  drop-in interchangeable. Both features are independently feature-flagged
+  (`AI_ANALYSIS_ENABLED`, `AI_RECOMMENDATION_ENABLED`) and surfaced in `GET /api/meta`.
 
 ### Explicitly deferred (not stubbed, not silently faked)
 - **RBAC/roles** — per product decision for this phase.
 - **Reports** — depends on cross-rep aggregation that needs roles to be meaningful.
-- **AI Surface Selection (auto segmentation)** — no segmentation vendor wired yet; manual
-  selection tools cover surface masking today.
 - **PDF export with dealer branding** — needs a render pipeline beyond client `<canvas>`;
   PNG and side-by-side JPG export work today, and the export endpoint returns a clear
   501 (not a silent downgrade) if PDF is requested.
@@ -69,7 +88,7 @@ docker compose up -d mysql
 
 # 2. Backend
 cd backend
-cp .env.example .env      # fill in DB + AI API key
+cp .env.example .env      # fill in DB + AI keys (house understanding + schemes work out of the box on the mock/catalog providers)
 npm install
 npm run migrate           # applies schema.sql (safe to re-run — additive/idempotent)
 npm run dev                # http://localhost:4000
@@ -85,9 +104,11 @@ Or everything at once: `docker compose up --build` from the project root.
 
 ## Next steps
 
-1. Plug in a real Clipdrop (or alternate) API key and test the cleanup step end-to-end.
-2. Decide on an AI surface-segmentation vendor if automatic wall/roof/trim detection is
-   wanted (drop-in: same proxy pattern as cleanup, returns a mask consumed by the
-   existing layer pipeline).
-3. If/when auth is needed, `createdBy`-style fields and per-project ownership can be
+1. Test the house-understanding flow end-to-end: upload a photo → **AI Understand** → add a
+   detected surface as a layer → paint with the surface lock on → **AI Schemes** → apply a
+   scheme. All of it works out of the box on the mock provider.
+2. Plug in a real Clipdrop (or alternate) API key and test the cleanup step end-to-end.
+3. Swap `AI_ANALYSIS_PROVIDER=http-vision` behind a real segmentation vendor for sharper
+   masks (no code changes — same response schema as the mock).
+4. If/when auth is needed, `createdBy`-style fields and per-project ownership can be
    added without a data migration — nothing here assumes a single global user.

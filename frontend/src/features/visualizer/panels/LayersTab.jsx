@@ -8,7 +8,7 @@ export default function LayersTab({ projectId, assetId, colorLookup }) {
   const { data: layerList = [] } = useLayersList(assetId);
   const { commit, commitDelete, commitBulkClear } = useHistoryCommand(projectId, assetId);
   const activeLayerId = useVisualizerStore((s) => s.activeLayerId);
-  const setActiveLayerId = useVisualizerStore((s) => s.setActiveLayerId);
+  const selectLayer = useVisualizerStore((s) => s.selectLayer);
 
   const [pendingDelete, setPendingDelete] = useState(null); // layer object or null
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -45,8 +45,8 @@ export default function LayersTab({ projectId, assetId, colorLookup }) {
               role="option"
               aria-selected={activeLayerId === layer.id}
               tabIndex={0}
-              onClick={() => setActiveLayerId(layer.id)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveLayerId(layer.id); } }}
+              onClick={() => selectLayer(layer.id)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectLayer(layer.id); } }}
               className={`flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 cursor-pointer text-sm ${
                 activeLayerId === layer.id ? 'bg-[var(--signal)]/10 border border-[var(--signal)]' : 'hover:bg-[var(--paper)]'
               }`}

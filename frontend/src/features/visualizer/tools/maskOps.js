@@ -6,6 +6,22 @@ export function createEmptyMask(width, height) {
   return new ImageData(width, height);
 }
 
+// Clips a mask's alpha to a constraint grid (e.g. an AI-detected surface
+// mask): paint cannot escape the constrained region. `constraintAlpha` is a
+// Uint8Array of length width*height; pixels outside it keep only their
+// intersection with the constraint, so feathered edges fade against the
+// surface boundary instead of hard-clipping.
+export function clipMaskToConstraint(mask, constraintAlpha) {
+  if (!constraintAlpha || constraintAlpha.length !== mask.width * mask.height) return mask;
+  const out = new ImageData(mask.width, mask.height);
+  out.data.set(mask.data);
+  for (let i = 0; i < mask.data.length; i += 4) {
+    const c = constraintAlpha[i / 4] || 0;
+    if (out.data[i + 3] > c) out.data[i + 3] = c;
+  }
+  return out;
+}
+
 // Blurs just the alpha channel via a canvas blur filter, tapering a hard
 // 0/255 edge into a soft falloff a few pixels wide so painted regions blend
 // into the surrounding wall texture instead of cutting out like a sticker.
@@ -316,27 +332,134 @@ export function mergeMasks(baseMask, strokeMask, mode = 'add') {
   return out;
 }
 
+// Near-zero, not exact-zero: an eraser stroke is rasterized on a real
+// <canvas> (rasterizeBrushStroke), and canvas fill/stroke operations
+// anti-alias their own geometric edges — a sub-pixel coverage artifact
+// independent of this app's own deliberate feathering (which the eraser
+// already disables via { feather: 0 } — see useToolInteraction.js — for
+// exactly this reason: without it, a *soft* stroke edge could never
+// subtract a layer's alpha down to true zero no matter how thoroughly the
+// user erased). ALPHA_FLOOR absorbs that native rendering noise without
+// weakening the check for a layer that still has real, visible paint —
+// 3/255 is ~1%, far below anything a user could perceive as "still
+// painted," and far below the alpha a stroke leaves on any pixel it didn't
+// genuinely cover.
+const ALPHA_FLOOR = 3;
+export function isMaskEmpty(mask) {
+  for (let i = 3; i < mask.data.length; i += 4) {
+    if (mask.data[i] > ALPHA_FLOOR) return false;
+  }
+  return true;
+}
+
+// Whether two same-size masks have any pixel where both have paint —
+// the eraser's canvas-hit-test: "does this layer actually have something
+// under the stroke," not just "is the stroke's bounding box near it."
+export function masksOverlap(maskA, maskB) {
+  for (let i = 3; i < maskA.data.length; i += 4) {
+    if (maskA.data[i] > 0 && maskB.data[i] > 0) return true;
+  }
+  return false;
+}
+
+// Per-pixel max across multiple same-size alpha grids — builds a single
+// "house protection" region out of every detected surface's own mask
+// (paintable or not: a window/door is still part of the house), regardless
+// of how many separate surfaces the house was split into. Pure/DOM-free so
+// it's unit-testable; the actual per-surface grids come from AI-detected
+// masks loaded via loadAlphaGrid (useHouseProtectionAlpha).
+export function unionAlphaGrids(grids) {
+  const real = (grids || []).filter(Boolean);
+  if (real.length === 0) return null;
+  const union = new Uint8Array(real[0].length);
+  for (const grid of real) {
+    for (let i = 0; i < union.length; i++) {
+      if (grid[i] > union[i]) union[i] = grid[i];
+    }
+  }
+  return union;
+}
+
+// Whether (x, y) falls solidly inside an alpha grid — used to validate a
+// Magic Wand click actually landed on the detected house before selecting
+// anything at all (requirements: reject a click outside the house region
+// instead of creating an empty/stray paint layer). Threshold defaults high
+// (128 of 255): a *click* should land solidly on a detected surface, not
+// merely brush its soft feathered edge — contrast with the looser threshold
+// floodFillMask itself uses while spreading (see houseAlphaThreshold below).
+export function isPointInsideAlpha(alpha, width, height, x, y, threshold = 128) {
+  const ix = Math.round(x);
+  const iy = Math.round(y);
+  if (ix < 0 || iy < 0 || ix >= width || iy >= height) return false;
+  return alpha[iy * width + ix] >= threshold;
+}
+
+// Pure predicate: should the Magic Wand's flood fill cross into this
+// neighbor pixel? DOM/Canvas-free (unlike floodFillMask itself, which needs
+// a real ImageData/canvas to feather its result) so this — the actual
+// house-aware decision — is unit-testable under plain Node.
+//
+// Three independent gates, all of which must pass:
+//  1. houseAlphaValue: if a detected house-region grid is available, a
+//     pixel outside it (below houseAlphaThreshold) can NEVER be entered,
+//     no matter how close its color is — this is what stops a click on a
+//     blue house wall from spreading into color-similar blue sky, which a
+//     color-tolerance-only flood fill cannot tell apart on its own.
+//  2. distFromSeed: the existing global color-tolerance check against the
+//     originally clicked pixel.
+//  3. step: the LAB distance from the pixel the fill is entering *from* —
+//     tighter than the seed tolerance. A real boundary (roofline against
+//     sky, wall against ground) shows a bigger jump between two adjacent
+//     pixels than the gradual internal shading of one surface does, even
+//     when both sides individually fall within the same broad tolerance of
+//     the clicked pixel — this is the "boundary-aware" half of the fill,
+//     and the only protection available at all when no house mask exists.
+export function canEnterFloodFillPixel({ neighborLab, seedLab, fromLab, tolerance, stepTolerance, houseAlphaValue, houseAlphaThreshold = 32 }) {
+  if (houseAlphaValue !== undefined && houseAlphaValue !== null && houseAlphaValue < houseAlphaThreshold) return false;
+  const distFromSeed = Math.sqrt((neighborLab.l - seedLab.l) ** 2 + (neighborLab.a - seedLab.a) ** 2 + (neighborLab.b - seedLab.b) ** 2);
+  if (distFromSeed > tolerance) return false;
+  const step = Math.sqrt((neighborLab.l - fromLab.l) ** 2 + (neighborLab.a - fromLab.a) ** 2 + (neighborLab.b - fromLab.b) ** 2);
+  if (step > stepTolerance) return false;
+  return true;
+}
+
+// Count of pixels with any paint (alpha > 0) — used for Magic Wand
+// selection-size logging, not a rendering concern.
+export function countMaskPixels(mask) {
+  let count = 0;
+  for (let i = 3; i < mask.data.length; i += 4) {
+    if (mask.data[i] > 0) count++;
+  }
+  return count;
+}
+
 // Flood-fill by LAB color distance from a clicked pixel — the "Magic Wand"
 // tool, pure client-side, no segmentation model (requirements doc, Section
 // 5.2 flags real AI surface segmentation as a separate, deferred feature).
-export function floodFillMask(imageData, startX, startY, tolerance, rgbToLab) {
+// Boundary-aware (see canEnterFloodFillPixel): gated by color distance from
+// the clicked pixel, the local step between adjacent pixels, and — when
+// `opts.houseAlpha` (a detected-house-region grid) is available — never
+// crosses outside it, however close the colors are on either side.
+export function floodFillMask(imageData, startX, startY, tolerance, rgbToLab, opts = {}) {
+  const { houseAlpha, houseAlphaThreshold = 32 } = opts;
   const { width, height, data } = imageData;
   const mask = new ImageData(width, height);
   const visited = new Uint8Array(width * height);
+  // A real edge shows a bigger jump between two adjacent pixels than the
+  // gradual shading inside one surface does — capped well below the overall
+  // seed tolerance so raising the color-similarity slider doesn't also loosen
+  // the boundary barrier.
+  const stepTolerance = Math.min(tolerance, 14);
 
   const startIdx = (startY * width + startX) * 4;
   const startLab = rgbToLab(data[startIdx], data[startIdx + 1], data[startIdx + 2]);
 
-  const stack = [[startX, startY]];
+  const stack = [[startX, startY, startLab]];
   visited[startY * width + startX] = 1;
 
   while (stack.length) {
-    const [x, y] = stack.pop();
+    const [x, y, fromLab] = stack.pop();
     const i = (y * width + x) * 4;
-    const lab = rgbToLab(data[i], data[i + 1], data[i + 2]);
-    const dist = Math.sqrt((lab.l - startLab.l) ** 2 + (lab.a - startLab.a) ** 2 + (lab.b - startLab.b) ** 2);
-    if (dist > tolerance) continue;
-
     mask.data[i + 3] = 255;
 
     const neighbors = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]];
@@ -344,8 +467,20 @@ export function floodFillMask(imageData, startX, startY, tolerance, rgbToLab) {
       if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
       const nIdx = ny * width + nx;
       if (visited[nIdx]) continue;
-      visited[nIdx] = 1;
-      stack.push([nx, ny]);
+      visited[nIdx] = 1; // mark on first discovery so each pixel is evaluated exactly once
+      const ni = nIdx * 4;
+      const neighborLab = rgbToLab(data[ni], data[ni + 1], data[ni + 2]);
+      const canEnter = canEnterFloodFillPixel({
+        neighborLab,
+        seedLab: startLab,
+        fromLab,
+        tolerance,
+        stepTolerance,
+        houseAlphaValue: houseAlpha ? houseAlpha[nIdx] : undefined,
+        houseAlphaThreshold,
+      });
+      if (!canEnter) continue;
+      stack.push([nx, ny, neighborLab]);
     }
   }
   return featherMask(mask, 1.5);
@@ -357,4 +492,22 @@ export function imageDataToPngBlob(imageData) {
   canvas.height = imageData.height;
   canvas.getContext('2d').putImageData(imageData, 0, 0);
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+}
+
+// Hit-tests a pointer against the AI-detected surface masks and returns the
+// topmost paintable surface whose alpha at that pixel is above `threshold`
+// (default: fully inside the mask). `surfaceMasks` is an array of
+// { surface, alpha } where alpha is the upscaled Uint8Array grid from
+// useSurfaceAlphaGrids. Order matters: later entries are "on top" (the same
+// stacking the layer pipeline uses), so the first hit wins.
+export function pickSurfaceAtPoint(surfaceMasks, x, y, threshold = 128) {
+  const ix = Math.round(x);
+  const iy = Math.round(y);
+  for (const entry of surfaceMasks || []) {
+    const { surface, alpha, width, height } = entry;
+    if (!alpha || !surface?.paintable) continue;
+    if (ix < 0 || iy < 0 || ix >= width || iy >= height) continue;
+    if (alpha[iy * width + ix] > threshold) return surface;
+  }
+  return null;
 }

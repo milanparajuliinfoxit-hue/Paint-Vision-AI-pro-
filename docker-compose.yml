@@ -28,6 +28,17 @@ services:
       DB_NAME: paint_visualizer
       UPLOAD_ROOT: /data/uploads
       CORS_ORIGIN: http://localhost:5173
+      # Previously never passed through at all — set these in a .env file
+      # next to this compose file (docker compose reads it automatically)
+      # before running anywhere but local/LAN dev. Left unset here keeps the
+      # documented local-dev default (API_ACCESS_KEY unset = open); see
+      # accessKey.middleware.js.
+      API_ACCESS_KEY: ${API_ACCESS_KEY:-}
+      AI_ANALYSIS_PROVIDER: ${AI_ANALYSIS_PROVIDER:-mock}
+      AI_RECOMMENDATION_PROVIDER: ${AI_RECOMMENDATION_PROVIDER:-catalog}
+      AI_PROVIDER: ${AI_PROVIDER:-}
+      HF_API_KEY: ${HF_API_KEY:-}
+      CLIPDROP_API_KEY: ${CLIPDROP_API_KEY:-}
     volumes:
       - uploads_data:/data/uploads
     depends_on:
@@ -40,6 +51,7 @@ services:
       - '5173:5173'
     environment:
       VITE_API_BASE_URL: http://localhost:4000
+      VITE_API_ACCESS_KEY: ${API_ACCESS_KEY:-}
     depends_on:
       - backend
 

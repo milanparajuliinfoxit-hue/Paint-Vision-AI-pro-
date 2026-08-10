@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowRight, LayoutGrid, List, Plus, Search, Sparkles } from 'lucide-react';
-import { useProjectsList } from './useProjects';
+import { ArrowRight, LayoutGrid, List, Plus, Search, Sparkles, Trash2 } from 'lucide-react';
+import { useProjectsList, useDeleteProject } from './useProjects';
 import CreateProjectModal from './CreateProjectModal';
 import StatusBadge from './statusBadge';
 import ProjectCover from './ProjectCover';
 import { Button } from '../../shared/ui/button';
+import { ConfirmDialog } from '../../shared/ui/confirmDialog';
+import { useToast } from '../../shared/ui/toast';
 import { cn } from '../../shared/lib/cn';
+import { logger } from '../../shared/lib/logger';
 
 const STATUSES = ['draft', 'in_review', 'client_approved', 'archived'];
 
@@ -24,7 +27,10 @@ export default function ProjectsListPage() {
   const [status, setStatus] = useState('');
   const [view, setView] = useState('grid');
   const [showCreate, setShowCreate] = useState(false);
+  const [deletingProject, setDeletingProject] = useState(null);
   const navigate = useNavigate();
+  const deleteProject = useDeleteProject();
+  const showToast = useToast();
 
   const { data: projects = [], isLoading } = useProjectsList({
     ...(search ? { search } : {}),
@@ -32,6 +38,17 @@ export default function ProjectsListPage() {
   });
 
   const hasFilters = Boolean(search || status);
+
+  async function handleDelete(project) {
+    try {
+      await deleteProject.mutateAsync(project.id);
+      logger.info('project.delete.completed', { projectId: project.id });
+      showToast('Project deleted.');
+    } catch (err) {
+      logger.error('project.delete.failed', { projectId: project.id, status: err.status, message: err.message });
+      showToast(`Delete failed: ${err.message}`, { variant: 'danger' });
+    }
+  }
 
   return (
     <div className="p-6 sm:p-8 max-w-6xl">
@@ -149,14 +166,30 @@ export default function ProjectsListPage() {
       {!isLoading && projects.length > 0 && view === 'grid' && (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">
           {projects.map((p) => (
-            <button
+            <div
               key={p.id}
+              role="button"
+              tabIndex={0}
               onClick={() => navigate(`/projects/${p.id}/visualize`)}
-              className="group overflow-hidden rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--paper-raised)] text-left shadow-[var(--shadow-card)] transition-all hover:-translate-y-0.5 hover:border-[var(--signal)] hover:shadow-[0_8px_24px_rgba(23,24,28,0.12)]"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  navigate(`/projects/${p.id}/visualize`);
+                }
+              }}
+              className="group cursor-pointer overflow-hidden rounded-[var(--radius-md)] border border-[var(--line)] bg-[var(--paper-raised)] text-left shadow-[var(--shadow-card)] transition-all hover:-translate-y-0.5 hover:border-[var(--signal)] hover:shadow-[0_8px_24px_rgba(23,24,28,0.12)]"
             >
               <div className="relative">
                 <ProjectCover project={p} />
                 <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/30 to-transparent" />
+                <button
+                  aria-label={`Delete ${p.name || p.client_name}`}
+                  title="Delete project"
+                  onClick={(e) => { e.stopPropagation(); setDeletingProject(p); }}
+                  className="absolute left-2 top-2 grid h-7 w-7 place-items-center rounded-full bg-white/90 text-[var(--danger)] opacity-0 shadow-sm transition-opacity hover:bg-white group-hover:opacity-100"
+                >
+                  <Trash2 size={13} />
+                </button>
                 <div className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-full bg-white/90 text-[var(--ink)] opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
                   <ArrowRight size={14} className="-rotate-45" />
                 </div>
@@ -169,7 +202,7 @@ export default function ProjectsListPage() {
                   Updated {formatDate(p.updated_at)}
                 </div>
               </div>
-            </button>
+            </div>
           ))}
         </div>
       )}
@@ -184,6 +217,7 @@ export default function ProjectsListPage() {
                 <th className="py-2.5 pr-4 font-medium">Status</th>
                 <th className="py-2.5 pr-4 font-medium">Updated</th>
                 <th className="py-2.5 pr-4 text-right font-medium">Open</th>
+                <th className="py-2.5 pr-4 text-right font-medium">Delete</th>
               </tr>
             </thead>
             <tbody>
@@ -210,6 +244,14 @@ export default function ProjectsListPage() {
                       className="ml-auto text-[var(--graphite)] opacity-0 transition-all group-hover:translate-x-0.5 group-hover:text-[var(--signal)] group-hover:opacity-100"
                     />
                   </td>
+                  <td className="py-3 pr-4 text-right">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setDeletingProject(p); }}
+                      className="text-[var(--danger)] opacity-0 transition-opacity group-hover:opacity-100 hover:underline"
+                    >
+                      Delete
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -221,6 +263,16 @@ export default function ProjectsListPage() {
         open={showCreate}
         onOpenChange={setShowCreate}
         onCreated={(project) => navigate(`/projects/${project.id}/visualize`)}
+      />
+
+      <ConfirmDialog
+        open={!!deletingProject}
+        onOpenChange={(open) => !open && setDeletingProject(null)}
+        title={`Delete "${deletingProject?.name || deletingProject?.client_name}"?`}
+        description="This permanently removes the project, its photos, masks, concepts, and exports. This cannot be undone."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => { handleDelete(deletingProject); setDeletingProject(null); }}
       />
     </div>
   );

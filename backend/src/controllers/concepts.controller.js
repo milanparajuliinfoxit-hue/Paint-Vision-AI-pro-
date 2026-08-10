@@ -14,7 +14,7 @@ async function create(req, res, next) {
     let thumbnailPath = null;
     if (req.file) {
       const relativeDir = path.join('uploads', 'projects', String(project.id), 'concepts');
-      thumbnailPath = storage.saveBuffer(relativeDir, `concept_${Date.now()}.png`, req.file.buffer);
+      thumbnailPath = await storage.saveBuffer(relativeDir, `concept_${Date.now()}.png`, req.file.buffer);
     }
 
     const concept = await conceptsModel.createConcept({

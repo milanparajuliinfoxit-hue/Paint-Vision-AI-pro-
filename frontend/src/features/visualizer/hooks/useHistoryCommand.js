@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { useUpdateLayer, useDeleteLayer, useRestoreLayer } from './useLayers';
 import { useAppendHistory, useHistoryList } from './useHistoryEntries';
+import { useProject, useSetUndoPointer } from '../../projects/useProjects';
 import { useVisualizerStore } from '../store/visualizerStore';
+import { debounce } from '../../../shared/lib/debounce';
 
 // Command pattern (requirements doc, Section 5.3): each entry stores enough
 // to invert the action rather than a full-state snapshot. Undo/redo is
@@ -42,6 +44,8 @@ export function useHistoryCommand(projectId, assetId) {
   const restoreLayer = useRestoreLayer(assetId);
   const appendHistory = useAppendHistory(projectId);
   const { data: historyEntries } = useHistoryList(projectId);
+  const { data: project } = useProject(projectId);
+  const setUndoPointer = useSetUndoPointer(projectId);
 
   const pushCommand = useVisualizerStore((s) => s.pushCommand);
   const hydrateHistory = useVisualizerStore((s) => s.hydrateHistory);
@@ -51,9 +55,15 @@ export function useHistoryCommand(projectId, assetId) {
   const activeLayerId = useVisualizerStore((s) => s.activeLayerId);
   const setActiveLayerId = useVisualizerStore((s) => s.setActiveLayerId);
 
+  // Seeds the stack from the persisted log AND the project's persisted
+  // undo_pointer together — hydrating from the log alone (old behavior)
+  // silently assumed nothing had ever been undone, which is why a delete
+  // undone in a previous session came back as "current" after reload and
+  // any further undo/redo replayed the wrong commands against already-
+  // deleted layer ids (404s on PATCH/DELETE for stale ids).
   const hydrated = useRef(false);
   useEffect(() => {
-    if (hydrated.current || !historyEntries) return;
+    if (hydrated.current || !historyEntries || !project) return;
     hydrated.current = true;
     hydrateHistory(
       historyEntries
@@ -72,9 +82,22 @@ export function useHistoryCommand(projectId, assetId) {
             before: type === 'patch' ? stripLayerId(e.before_state) : null,
             after: type === 'patch' ? stripLayerId(e.after_state) : null,
           };
-        })
+        }),
+      project.undo_pointer
     );
-  }, [historyEntries, hydrateHistory]);
+  }, [historyEntries, project, hydrateHistory]);
+
+  // Mirrors every local pointer move back to the server (debounced — Ctrl+Z
+  // mashing and History-tab scrubbing can move it several times a second,
+  // and only the final position matters). Skips the move hydration itself
+  // causes, since that value came *from* the server and writing it back is
+  // a no-op at best and a lost race at worst if hydration for a second
+  // asset switch lands after a real user move.
+  const persistPointer = useRef(debounce((pointer) => setUndoPointer.mutate(pointer), 400)).current;
+  useEffect(() => {
+    if (!hydrated.current || !project || undoPointer === project.undo_pointer) return;
+    persistPointer(undoPointer);
+  }, [undoPointer, project, persistPointer]);
 
   // Records a patch-type command in both the persisted history log and the
   // local undo stack, without performing any mutation itself — `commit`

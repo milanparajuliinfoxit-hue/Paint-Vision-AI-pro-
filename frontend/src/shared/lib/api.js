@@ -1,17 +1,52 @@
+import { logger } from './logger';
+
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 const API_KEY = import.meta.env.VITE_API_ACCESS_KEY || '';
 
-async function request(path, options = {}) {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(API_KEY ? { 'x-api-key': API_KEY } : {}),
-      ...options.headers,
-    },
-  });
+// Default timeout for ordinary CRUD calls; AI analysis/recommendations and
+// image cleanup run real model inference server-side and need much longer.
+const DEFAULT_TIMEOUT_MS = 15000;
+const LONG_TIMEOUT_MS = 60000;
+
+async function request(path, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+        ...(API_KEY ? { 'x-api-key': API_KEY } : {}),
+        ...options.headers,
+      },
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      logger.warn('api.request.timeout', { method: options.method || 'GET', path, timeoutMs });
+      const timeoutErr = new Error('Request timed out. Please check your connection and try again.');
+      timeoutErr.isTimeout = true;
+      throw timeoutErr;
+    }
+    logger.error('api.request.network_error', { method: options.method || 'GET', path, message: err.message });
+    const networkErr = new Error('Network error. Please check your connection and try again.');
+    networkErr.isNetworkError = true;
+    networkErr.cause = err;
+    throw networkErr;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
+    // X-Request-Id (set by the backend's request-correlation middleware)
+    // ties this log line back to the exact server-side request/error logs.
+    logger.error('api.request.failed', {
+      method: options.method || 'GET',
+      path,
+      status: res.status,
+      requestId: res.headers.get('x-request-id') || undefined,
+    });
     const err = new Error(body.error || `Request failed: ${res.status}`);
     err.status = res.status;
     throw err;
@@ -46,7 +81,11 @@ export const catalog = {
     return request('/api/catalog/import/preview', { method: 'POST', body: form });
   },
   commitImport: (payload) => request('/api/catalog/import/commit', { method: 'POST', body: JSON.stringify(payload) }),
-  exportUrl: () => `${BASE_URL}/api/catalog/import/export`,
+  // A plain <a href> to this endpoint can't attach the x-api-key header, so
+  // it 401s the moment a real key is configured (which .env already has) —
+  // fetch it as a blob through `request` (which does attach the header)
+  // instead; the caller turns the blob into a download.
+  export: () => request('/api/catalog/import/export'),
 };
 
 // --- Projects ---
@@ -59,6 +98,9 @@ export const projects = {
   create: (data) => request('/api/projects', { method: 'POST', body: JSON.stringify(data) }),
   update: (id, patch, updatedAt) =>
     request(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify({ ...patch, updatedAt }) }),
+  setUndoPointer: (id, pointer) =>
+    request(`/api/projects/${id}/undo-pointer`, { method: 'PATCH', body: JSON.stringify({ pointer }) }),
+  remove: (id) => request(`/api/projects/${id}`, { method: 'DELETE' }),
 };
 
 // --- Assets (uploaded photos + their AI-cleaned derivative) ---
@@ -76,15 +118,22 @@ export const assets = {
   clean: (assetId, maskBlob) => {
     const form = new FormData();
     if (maskBlob) form.append('mask', maskBlob);
-    return request(`/api/assets/${assetId}/clean`, { method: 'POST', body: form });
+    return request(`/api/assets/${assetId}/clean`, { method: 'POST', body: form }, LONG_TIMEOUT_MS);
   },
-  fileUrl: (relativePath) => `${BASE_URL}/files/${String(relativePath).replace(/\\/g, '/')}`,
+  // /files/* is gated by the same access key as /api (see backend app.js) —
+  // but this URL is consumed directly by <img src>/Konva Image, which can't
+  // attach the x-api-key header, so the key travels as a query param here
+  // instead (only here; every other request still uses the header).
+  fileUrl: (relativePath) => {
+    const path = `${BASE_URL}/files/${String(relativePath).replace(/\\/g, '/')}`;
+    return API_KEY ? `${path}?key=${encodeURIComponent(API_KEY)}` : path;
+  },
 };
 
 // --- Layers (masked, re-colorable surface regions on an asset) ---
 export const layers = {
-  create: (assetId, { name, createdVia, currentColorId, opacity, orderIndex }, maskBlob) => {
-    const form = toForm({ name, createdVia, currentColorId, opacity, orderIndex }, { mask: maskBlob });
+  create: (assetId, { name, createdVia, currentColorId, opacity, orderIndex, aiSurfaceKey, aiAnalysisId, aiSchemeId }, maskBlob) => {
+    const form = toForm({ name, createdVia, currentColorId, opacity, orderIndex, aiSurfaceKey, aiAnalysisId, aiSchemeId }, { mask: maskBlob });
     return request(`/api/assets/${assetId}/layers`, { method: 'POST', body: form });
   },
   list: (assetId) => request(`/api/assets/${assetId}/layers`),
@@ -99,6 +148,25 @@ export const layers = {
   },
   remove: (layerId) => request(`/api/layers/${layerId}`, { method: 'DELETE' }),
   restore: (layerId) => request(`/api/layers/${layerId}/restore`, { method: 'POST' }),
+};
+
+// --- Meta (feature-flag-aware platform info) ---
+export const meta = {
+  get: () => request('/api/meta'),
+};
+
+// --- AI (house-understanding + catalog-only paint recommendations) ---
+export const ai = {
+  analyze: (assetId) => request(`/api/assets/${assetId}/ai/analyze`, { method: 'POST' }, LONG_TIMEOUT_MS),
+  getAnalysis: (assetId) => request(`/api/assets/${assetId}/ai/analysis`),
+  generateRecommendations: (assetId, count) =>
+    request(`/api/assets/${assetId}/ai/recommendations`, { method: 'POST', body: JSON.stringify({ count }) }, LONG_TIMEOUT_MS),
+  listRecommendations: (assetId) => request(`/api/assets/${assetId}/ai/recommendations`),
+  // Autonomous pipeline: process() starts (or no-ops if already running/done);
+  // getStatus() is the lightweight, frequently-polled read.
+  process: (assetId, { force } = {}) =>
+    request(`/api/assets/${assetId}/ai/process`, { method: 'POST', body: JSON.stringify({ force: !!force }) }, LONG_TIMEOUT_MS),
+  getStatus: (assetId) => request(`/api/assets/${assetId}/ai/status`),
 };
 
 // --- History (append-only undo/redo log, persisted per project) ---
