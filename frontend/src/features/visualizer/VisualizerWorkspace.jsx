@@ -12,6 +12,7 @@ import { imageDataToPngBlob, mergeMasks } from './tools/maskOps';
 import { rgbToLab } from '../../shared/lib/colorEngine';
 import { assets as assetsApi } from '../../shared/lib/api';
 import { useToast } from '../../shared/ui/toast';
+import { reportError } from '../../shared/lib/errorReporter';
 import { useMediaQuery } from '../../shared/lib/useMediaQuery';
 
 import CanvasStage from './canvas/CanvasStage';
@@ -118,6 +119,9 @@ export default function VisualizerWorkspace({ onColorFocus }) {
   const maskWriteQueueRef = useRef(Promise.resolve());
   function enqueueMaskWrite(work) {
     const run = maskWriteQueueRef.current.then(work, work);
+    // Only the *queue* forgets a failure, so one bad write doesn't wedge every
+    // later stroke. The returned promise still rejects, and the caller reports
+    // it — previously the rejection had nowhere to go at all.
     maskWriteQueueRef.current = run.catch(() => {});
     return run;
   }
@@ -130,8 +134,16 @@ export default function VisualizerWorkspace({ onColorFocus }) {
       const existing = await getLayerMaskData(layer);
       const merged = mergeMasks(existing, strokeMask, mode);
       maskCacheRef.current.set(layer.id, { path: layer.mask_path, imageData: merged });
-      const blob = await imageDataToPngBlob(merged);
-      return commitMaskEdit({ action: 'mask-edited', layerId: layer.id, maskBlob: blob, beforeMaskPath: layer.mask_path });
+      try {
+        const blob = await imageDataToPngBlob(merged);
+        return await commitMaskEdit({ action: 'mask-edited', layerId: layer.id, maskBlob: blob, beforeMaskPath: layer.mask_path });
+      } catch (err) {
+        // The cache was optimistically advanced above; if the write never
+        // landed, every later stroke would merge onto a base the server
+        // doesn't have. Drop it so the next stroke re-reads the real mask.
+        maskCacheRef.current.delete(layer.id);
+        throw err;
+      }
     });
   }
 
@@ -167,7 +179,19 @@ export default function VisualizerWorkspace({ onColorFocus }) {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [undoWithCache, redoWithCache]);
 
+  // Tools call this without awaiting it (a stroke ends on a pointer event),
+  // so it owns its own failure reporting: an error here used to become an
+  // unhandled rejection and the stroke simply disappeared on the next
+  // refetch with nothing shown to the user.
   async function handleCommitMask(maskImageData, createdVia, opts = {}) {
+    try {
+      await commitMask(maskImageData, createdVia, opts);
+    } catch (err) {
+      reportError(err, { action: `Saving ${createdVia} selection` });
+    }
+  }
+
+  async function commitMask(maskImageData, createdVia, opts = {}) {
     // Dedicated eraser tool: always subtracts from the active layer's
     // existing mask, regardless of brush mode/Alt state. Never touches the
     // original photo or any other layer — it only shrinks a paint mask.
@@ -443,7 +467,7 @@ function loadMaskImageData(url, width, height) {
       ctx.drawImage(img, 0, 0, width, height);
       resolve(ctx.getImageData(0, 0, width, height));
     };
-    img.onerror = reject;
+    img.onerror = () => reject(new Error(`Could not load layer mask: ${url}`));
     img.src = url;
   });
 }

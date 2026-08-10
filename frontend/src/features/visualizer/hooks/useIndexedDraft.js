@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { get, set } from 'idb-keyval';
 import { useVisualizerStore } from '../store/visualizerStore';
 import { debounce } from '../../../shared/lib/debounce';
+import { reportError } from '../../../shared/lib/errorReporter';
 
 const DRAFT_FIELDS = ['viewport', 'activeTool', 'activeAssetId', 'activeLayerId', 'brushMode', 'brushSize'];
 
@@ -18,10 +19,15 @@ export function useIndexedDraft(projectId) {
   useEffect(() => {
     if (!projectId || restored.current) return;
     restored.current = true;
-    get(draftKey(projectId)).then((draft) => {
-      if (!draft) return;
-      useVisualizerStore.setState((state) => ({ ...state, ...draft }));
-    });
+    // The draft is a convenience cache, so a blocked/full IndexedDB (private
+    // browsing, quota) must not break the workspace — but it can't vanish
+    // unnoticed either: it rejected as an unhandled promise before.
+    get(draftKey(projectId))
+      .then((draft) => {
+        if (!draft) return;
+        useVisualizerStore.setState((state) => ({ ...state, ...draft }));
+      })
+      .catch((err) => reportError(err, { action: 'Restoring workspace draft', silent: true }));
   }, [projectId]);
 
   useEffect(() => {
@@ -29,7 +35,9 @@ export function useIndexedDraft(projectId) {
     const persist = debounce((state) => {
       const draft = {};
       for (const field of DRAFT_FIELDS) draft[field] = state[field];
-      set(draftKey(projectId), draft);
+      set(draftKey(projectId), draft).catch((err) =>
+        reportError(err, { action: 'Caching workspace draft', silent: true })
+      );
     }, 400);
 
     const unsubscribe = useVisualizerStore.subscribe(persist);

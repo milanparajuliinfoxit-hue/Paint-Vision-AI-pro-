@@ -16,6 +16,8 @@ const layersRoutes = require('./routes/layers.routes');
 const exportsRoutes = require('./routes/exports.routes');
 
 const storage = require('./services/storage.service');
+const logger = require('./services/logger.service');
+const db = require('./config/db');
 
 const app = express();
 
@@ -36,7 +38,17 @@ app.use('/api/catalog/import', uploadLimiter);
 
 app.use('/api', requireAccessKey);
 
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+// Reports the dependency the app can't work without. Previously this always
+// answered "ok", so an unreachable database looked healthy to any monitor.
+app.get('/health', async (req, res) => {
+  try {
+    await db.ping();
+    res.json({ status: 'ok', database: 'ok' });
+  } catch (err) {
+    logger.error({ message: `Health check failed: ${err.message}`, code: err.code });
+    res.status(503).json({ status: 'degraded', database: 'unreachable' });
+  }
+});
 
 app.use('/api/catalog', paintsRoutes);
 app.use('/api/catalog/import', importExportRoutes);
@@ -48,11 +60,25 @@ app.use('/api/exports', exportsRoutes);
 // Serve stored images through a controlled route rather than exposing the
 // upload folder directly — keeps the door open for access control later.
 app.get('/files/*', (req, res, next) => {
+  let absolute;
   try {
     const relativePath = req.params[0];
     if (!storage.exists(relativePath)) return res.status(404).json({ error: 'File not found' });
-    res.sendFile(storage.absolutePath(relativePath));
-  } catch (err) { next(err); }
+    absolute = storage.absolutePath(relativePath);
+  } catch (err) { return next(err); }
+
+  // sendFile reports read/stream failures through its callback, not by
+  // throwing — without it a mid-stream failure left the request hanging
+  // until the client timed out, with nothing logged.
+  res.sendFile(absolute, (err) => {
+    if (err) next(err);
+  });
+});
+
+// Unknown API paths get a JSON 404 like every other API error, instead of
+// Express's default HTML page that the frontend's fetch wrapper can't parse.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `Unknown API endpoint: ${req.method} ${req.originalUrl}` });
 });
 
 app.use(errorHandler);

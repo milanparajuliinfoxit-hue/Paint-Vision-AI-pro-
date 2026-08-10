@@ -25,6 +25,7 @@ export default function ExportPanel({
   const [format, setFormat] = useState('png');
   const [exporting, setExporting] = useState(false);
   const [paintedDataUrl, setPaintedDataUrl] = useState(null);
+  const [renderError, setRenderError] = useState(null);
   const showToast = useToast();
 
   // Re-derives the full composite independently of LayerNode's own cached
@@ -33,6 +34,7 @@ export default function ExportPanel({
   useEffect(() => {
     if (!open || !baseImage || !baseImageData || !width || !height) return;
     let cancelled = false;
+    setRenderError(null);
 
     (async () => {
       const canvas = document.createElement('canvas');
@@ -71,10 +73,17 @@ export default function ExportPanel({
       }
 
       if (!cancelled) setPaintedDataUrl(canvas.toDataURL('image/png'));
-    })();
+    })().catch((err) => {
+      // A mask that fails to load used to reject here with nobody listening:
+      // the preview stayed blank and Export stayed disabled forever, with no
+      // hint that anything had gone wrong.
+      if (cancelled) return;
+      setRenderError(err.message);
+      showToast(`Could not render the export preview: ${err.message}`, { variant: 'danger' });
+    });
 
     return () => { cancelled = true; };
-  }, [open, baseImage, baseImageData, width, height, layers, colorLookup]);
+  }, [open, baseImage, baseImageData, width, height, layers, colorLookup, showToast]);
 
   async function handleExport() {
     if (!paintedDataUrl) return;
@@ -118,6 +127,12 @@ export default function ExportPanel({
 
         <ComparisonPreview mode={mode} beforeSrc={originalUrl} afterSrc={paintedDataUrl} beforeLabel="Original" afterLabel="Painted" />
 
+        {renderError && (
+          <p role="alert" className="mt-3 text-xs text-[var(--danger)]">
+            Preview could not be rendered: {renderError}
+          </p>
+        )}
+
         <div className="flex items-center gap-3 mt-4">
           <label className="text-sm font-medium">Format</label>
           <select value={format} onChange={(e) => setFormat(e.target.value)} className="rounded-[var(--radius-sm)] border border-[var(--line)] px-2 py-1 text-sm">
@@ -149,7 +164,15 @@ async function composeSideBySide(originalUrl, paintedDataUrl) {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(orig, 0, 0);
   ctx.drawImage(painted, orig.width, 0);
-  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+  return new Promise((resolve, reject) => {
+    // toBlob hands back null when encoding fails; uploading that produced an
+    // empty export job instead of an error.
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error('Could not encode the side-by-side JPG'))),
+      'image/jpeg',
+      0.92
+    );
+  });
 }
 
 function loadImg(src) {
@@ -157,7 +180,9 @@ function loadImg(src) {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => resolve(img);
-    img.onerror = reject;
+    // The DOM error event carries no message — rejecting with it produced
+    // "Export failed: undefined".
+    img.onerror = () => reject(new Error(`Could not load image: ${src}`));
     img.src = src;
   });
 }

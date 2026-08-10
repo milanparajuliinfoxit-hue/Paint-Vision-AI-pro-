@@ -13,6 +13,7 @@ export function useAppendHistory(projectId) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (entry) => history.append(projectId, entry),
+    meta: { action: 'Recording history entry' },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['history', projectId] }),
   });
 }

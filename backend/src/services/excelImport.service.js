@@ -1,6 +1,7 @@
 const XLSX = require('xlsx');
 const pool = require('../config/db');
 const paintsModel = require('../services/paints.model');
+const logger = require('../services/logger.service');
 const { paintSchema, EXCEL_COLUMN_MAP } = require('./paints.validation');
 
 /**
@@ -9,8 +10,24 @@ const { paintSchema, EXCEL_COLUMN_MAP } = require('./paints.validation');
  * calls /commit with the same rows + a duplicate strategy.
  */
 async function previewImport(buffer) {
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  // An unreadable workbook is a bad upload, not a server fault — say so with
+  // the parser's reason instead of letting a raw xlsx error become a 500.
+  let workbook;
+  try {
+    workbook = XLSX.read(buffer, { type: 'buffer' });
+  } catch (err) {
+    const badFile = new Error(`Could not read the uploaded workbook: ${err.message}`);
+    badFile.status = 400;
+    throw badFile;
+  }
+
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  if (!sheet) {
+    const empty = new Error('The uploaded workbook has no sheets');
+    empty.status = 400;
+    throw empty;
+  }
+
   const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: null });
 
   const report = { totalRows: rawRows.length, valid: [], errors: [] };
@@ -68,14 +85,14 @@ async function commitImport({ validRows, fileName, duplicateStrategy = 'update' 
           continue;
         }
         if (duplicateStrategy === 'create_new') {
-          await paintsModel.create(row.data);
+          await paintsModel.create(row.data, conn);
           created++;
           continue;
         }
-        await paintsModel.update(row.existingId, row.data);
+        await paintsModel.update(row.existingId, row.data, conn);
         updated++;
       } else {
-        await paintsModel.create(row.data);
+        await paintsModel.create(row.data, conn);
         created++;
       }
     }
@@ -88,7 +105,13 @@ async function commitImport({ validRows, fileName, duplicateStrategy = 'update' 
 
     await conn.commit();
   } catch (err) {
-    await conn.rollback();
+    // A failing rollback must not replace the error that caused it — that
+    // would hide the real import failure behind a connection-level message.
+    try {
+      await conn.rollback();
+    } catch (rollbackErr) {
+      logger.error({ message: `Import rollback failed: ${rollbackErr.message}`, originalError: err.message });
+    }
     throw err;
   } finally {
     conn.release();

@@ -11,6 +11,18 @@ async function create(req, res, next) {
     const { name, layerColorMap } = req.body;
     if (!name) return res.status(400).json({ error: 'name is required' });
 
+    // layerColorMap arrives as a JSON string in a multipart field — a
+    // malformed value is the caller's mistake (400), not a 500 with a raw
+    // SyntaxError message.
+    let parsedLayerColorMap;
+    if (layerColorMap) {
+      try {
+        parsedLayerColorMap = JSON.parse(layerColorMap);
+      } catch {
+        return res.status(400).json({ error: 'layerColorMap must be valid JSON' });
+      }
+    }
+
     let thumbnailPath = null;
     if (req.file) {
       const relativeDir = path.join('uploads', 'projects', String(project.id), 'concepts');
@@ -21,7 +33,7 @@ async function create(req, res, next) {
       projectId: project.id,
       name,
       thumbnailPath,
-      layerColorMap: layerColorMap ? JSON.parse(layerColorMap) : undefined,
+      layerColorMap: parsedLayerColorMap,
     });
     res.status(201).json(concept);
   } catch (err) { next(err); }

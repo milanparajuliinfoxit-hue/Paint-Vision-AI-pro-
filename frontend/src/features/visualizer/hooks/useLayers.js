@@ -13,6 +13,7 @@ export function useCreateLayer(assetId) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ fields, maskBlob }) => layers.create(assetId, fields, maskBlob),
+    meta: { action: 'Creating layer' },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['layers', assetId] }),
   });
 }
@@ -24,6 +25,7 @@ export function useUpdateLayer(assetId) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ layerId, patch, updatedAt, maskBlob }) => layers.update(layerId, patch, updatedAt, maskBlob),
+    meta: { action: 'Saving layer change' },
     onMutate: async ({ layerId, patch }) => {
       await queryClient.cancelQueries({ queryKey: ['layers', assetId] });
       const previous = queryClient.getQueryData(['layers', assetId]);
@@ -43,6 +45,7 @@ export function useDeleteLayer(assetId) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (layerId) => layers.remove(layerId),
+    meta: { action: 'Deleting layer' },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['layers', assetId] }),
   });
 }
@@ -52,6 +55,7 @@ export function useRestoreLayer(assetId) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (layerId) => layers.restore(layerId),
+    meta: { action: 'Restoring layer' },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['layers', assetId] }),
   });
 }
