@@ -1,3 +1,5 @@
+import { logger } from './logger';
+
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 const API_KEY = import.meta.env.VITE_API_ACCESS_KEY || '';
 
@@ -22,10 +24,12 @@ async function request(path, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
     });
   } catch (err) {
     if (err.name === 'AbortError') {
+      logger.warn('api.request.timeout', { method: options.method || 'GET', path, timeoutMs });
       const timeoutErr = new Error('Request timed out. Please check your connection and try again.');
       timeoutErr.isTimeout = true;
       throw timeoutErr;
     }
+    logger.error('api.request.network_error', { method: options.method || 'GET', path, message: err.message });
     const networkErr = new Error('Network error. Please check your connection and try again.');
     networkErr.isNetworkError = true;
     networkErr.cause = err;
@@ -35,6 +39,14 @@ async function request(path, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
+    // X-Request-Id (set by the backend's request-correlation middleware)
+    // ties this log line back to the exact server-side request/error logs.
+    logger.error('api.request.failed', {
+      method: options.method || 'GET',
+      path,
+      status: res.status,
+      requestId: res.headers.get('x-request-id') || undefined,
+    });
     const err = new Error(body.error || `Request failed: ${res.status}`);
     err.status = res.status;
     throw err;
@@ -86,6 +98,9 @@ export const projects = {
   create: (data) => request('/api/projects', { method: 'POST', body: JSON.stringify(data) }),
   update: (id, patch, updatedAt) =>
     request(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify({ ...patch, updatedAt }) }),
+  setUndoPointer: (id, pointer) =>
+    request(`/api/projects/${id}/undo-pointer`, { method: 'PATCH', body: JSON.stringify({ pointer }) }),
+  remove: (id) => request(`/api/projects/${id}`, { method: 'DELETE' }),
 };
 
 // --- Assets (uploaded photos + their AI-cleaned derivative) ---

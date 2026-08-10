@@ -1,6 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { deriveStage } = require('./aiPipeline.service');
+const aiJobsModel = require('../aiJobs.model');
+const houseUnderstanding = require('./houseUnderstanding.service');
+const paintRecommendation = require('./paintRecommendation.service');
+const { deriveStage, startPipeline } = require('./aiPipeline.service');
 
 // listJobsForAsset orders id DESC (most recent first) — these fixtures
 // follow that convention since deriveStage relies on .find() picking the
@@ -65,4 +68,51 @@ test('a recommendation job from a PRIOR analysis does not count as ready for a N
     job({ id: 5, status: 'succeeded' }),
   ];
   assert.equal(deriveStage(jobs).stage, 'schemes');
+});
+
+// Regression test for a real concurrency bug: the original implementation
+// checked `inFlight`, then awaited a DB read, then claimed the slot — two
+// near-simultaneous calls could both pass the check before either claimed
+// it, so both ran the pipeline. The fix claims the slot synchronously
+// before the first await.
+test('two concurrent startPipeline calls for the same asset only run the pipeline once', async () => {
+  const origList = aiJobsModel.listJobsForAsset;
+  const origAnalyze = houseUnderstanding.analyzeAsset;
+  const origGenerate = paintRecommendation.generateRecommendations;
+
+  let analyzeCalls = 0;
+  aiJobsModel.listJobsForAsset = async () => []; // always "idle" — nothing short-circuits the race
+  houseUnderstanding.analyzeAsset = async () => {
+    analyzeCalls++;
+    await new Promise((resolve) => setTimeout(resolve, 20)); // hold the race window open
+    return { ok: false, failureReason: 'test stub, not a real failure' };
+  };
+  paintRecommendation.generateRecommendations = async () => {};
+
+  try {
+    await Promise.all([startPipeline('asset-race'), startPipeline('asset-race')]);
+    assert.equal(analyzeCalls, 1, `expected exactly one analyzeAsset call, got ${analyzeCalls}`);
+  } finally {
+    aiJobsModel.listJobsForAsset = origList;
+    houseUnderstanding.analyzeAsset = origAnalyze;
+    paintRecommendation.generateRecommendations = origGenerate;
+  }
+});
+
+test('startPipeline releases its claim after a no-op return (already-ready asset) — a later call is not blocked forever', async () => {
+  const origList = aiJobsModel.listJobsForAsset;
+  aiJobsModel.listJobsForAsset = async () => [
+    { job_type: 'paint-recommendation', status: 'succeeded', id: 2 },
+    { job_type: 'house-understanding', status: 'succeeded', id: 1 },
+  ];
+  try {
+    const first = await startPipeline('asset-ready');
+    assert.equal(first.stage, 'ready');
+    // If the claim wasn't released, this would hang waiting on inFlight
+    // forever instead of resolving — the `await` here is the actual assertion.
+    const second = await startPipeline('asset-ready');
+    assert.equal(second.stage, 'ready');
+  } finally {
+    aiJobsModel.listJobsForAsset = origList;
+  }
 });

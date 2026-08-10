@@ -32,13 +32,51 @@ async function main() {
     "ALTER TABLE layers ADD COLUMN ai_surface_key VARCHAR(80) NULL AFTER finish_override",
     "ALTER TABLE layers ADD COLUMN ai_analysis_id INT NULL AFTER ai_surface_key",
     "ALTER TABLE layers ADD COLUMN ai_scheme_id INT NULL AFTER ai_analysis_id",
-    "ALTER TABLE layers ADD UNIQUE INDEX uq_layers_ai_surface (ai_analysis_id, ai_surface_key)",
+    "ALTER TABLE ai_jobs ADD COLUMN running_claim VARCHAR(30) GENERATED ALWAYS AS (CASE WHEN status = 'running' THEN job_type ELSE NULL END) STORED",
   ];
   for (const stmt of upgradeColumns) {
     try {
       await connection.query(stmt);
     } catch (err) {
       if (err.code !== 'ER_DUP_FIELDNAME') throw err;
+    }
+  }
+
+  // undo_pointer backfill only belongs in the same run that adds the
+  // column. A project's pointer reflects real undo/redo activity from then
+  // on, so re-running this UPDATE on every `npm run migrate` would clobber
+  // legitimate state with "everything in the log is applied" — wrong for
+  // any project with an actual undo in progress. Gating it on the ALTER
+  // succeeding (not hitting ER_DUP_FIELDNAME) makes it run exactly once.
+  try {
+    await connection.query('ALTER TABLE projects ADD COLUMN undo_pointer INT NOT NULL DEFAULT -1');
+    await connection.query(`
+      UPDATE projects p
+      LEFT JOIN (SELECT project_id, COUNT(*) AS cnt FROM history_entries GROUP BY project_id) h
+        ON h.project_id = p.id
+      SET p.undo_pointer = COALESCE(h.cnt, 0) - 1
+    `);
+  } catch (err) {
+    if (err.code !== 'ER_DUP_FIELDNAME') throw err;
+  }
+
+  // Separate loop for indexes: re-running an ADD INDEX/ADD UNIQUE KEY fails
+  // with ER_DUP_KEYNAME, not ER_DUP_FIELDNAME — a statement that adds an
+  // index was previously mixed into the column loop above, which meant
+  // `npm run migrate` actually threw on its second run despite being
+  // documented as safe to re-run (found by actually re-running it, not by
+  // reading the code). `uq_layers_ai_surface`'s ADD COLUMN statements for
+  // ai_analysis_id/ai_surface_key stay above since those are genuinely
+  // column adds; only the index statement moved here.
+  const upgradeIndexes = [
+    'ALTER TABLE layers ADD UNIQUE INDEX uq_layers_ai_surface (ai_analysis_id, ai_surface_key)',
+    'ALTER TABLE ai_jobs ADD UNIQUE KEY uq_ai_jobs_running (asset_id, running_claim)',
+  ];
+  for (const stmt of upgradeIndexes) {
+    try {
+      await connection.query(stmt);
+    } catch (err) {
+      if (err.code !== 'ER_DUP_KEYNAME') throw err;
     }
   }
 

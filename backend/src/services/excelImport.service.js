@@ -93,6 +93,18 @@ async function commitImport({ validRows, fileName, duplicateStrategy = 'update' 
     await conn.commit();
   } catch (err) {
     await conn.rollback();
+    // Found by actually running an import with an in-batch duplicate SKU
+    // (two rows sharing a color_code, both classified 'create' since
+    // neither exists yet — preview can't see the batch's own duplicates):
+    // the raw MySQL constraint message ("Duplicate entry 'X' for key
+    // 'paints.uq_color_code'") was reaching the API response unfiltered.
+    // The whole batch is already correctly rolled back above; this only
+    // changes what the dealer sees about why.
+    if (err.code === 'ER_DUP_ENTRY') {
+      const clean = new Error('Import failed — the file has more than one row with the same color code. Fix the duplicate and re-import; nothing was changed.');
+      clean.status = 409;
+      throw clean;
+    }
     throw err;
   } finally {
     conn.release();

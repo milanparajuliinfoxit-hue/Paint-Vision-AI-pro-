@@ -70,6 +70,15 @@ CREATE TABLE IF NOT EXISTS projects (
     status          ENUM('draft','in_review','client_approved','archived') NOT NULL DEFAULT 'draft',
     cover_asset_id  VARCHAR(36) NULL,
     tags            JSON NULL,
+    -- Index into this project's history_entries the client's local undo
+    -- stack was last positioned at (-1 = nothing applied). Undo/redo apply
+    -- their mutation instantly and locally, then mirror to history_entries
+    -- for the log — but the log is append-only and never records an
+    -- undo/redo itself, so without a persisted pointer a page reload has no
+    -- way to know how far back the user had undone and re-derives the
+    -- pointer as "everything in the log is applied," which is wrong
+    -- whenever anything was undone and not redone before reload.
+    undo_pointer    INT NOT NULL DEFAULT -1,
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     -- Millisecond precision: the PATCH conflict check (Section 7) compares
     -- updated_at against a client-held value, and second-resolution
@@ -184,10 +193,19 @@ CREATE TABLE IF NOT EXISTS ai_jobs (
     processing_time_ms  INT NULL,
     failure_reason      VARCHAR(500) NULL,
     output_json         JSON NULL,
+    -- Generated column: job_type while status='running', NULL otherwise.
+    -- MySQL unique indexes don't enforce uniqueness across NULLs, so
+    -- uq_ai_jobs_running below only ever rejects a second 'running' row for
+    -- the same (asset_id, job_type) — a real database constraint against
+    -- duplicate concurrent AI runs, correct even across multiple app
+    -- instances (an in-process lock, e.g. inFlightLock.service.js, is not:
+    -- it only protects a single Node process).
+    running_claim       VARCHAR(30) GENERATED ALWAYS AS (CASE WHEN status = 'running' THEN job_type ELSE NULL END) STORED,
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at          TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     CONSTRAINT fk_ai_job_asset FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
-    KEY idx_ai_job_asset (asset_id)
+    KEY idx_ai_job_asset (asset_id),
+    UNIQUE KEY uq_ai_jobs_running (asset_id, running_claim)
 ) ENGINE=InnoDB;
 
 -- Painatable / non-paintable surface regions detected in a photo. `paintable`

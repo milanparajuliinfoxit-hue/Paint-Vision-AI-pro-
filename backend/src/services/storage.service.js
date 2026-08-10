@@ -76,6 +76,30 @@ async function deleteDirIfEmpty(relativeDir) {
   }
 }
 
+// Recursively removes an entire directory tree that is *exclusively owned*
+// by one resource (an asset id, a project's uploads/projects/<id> folder) —
+// never call this with anything derived from user-supplied input; the
+// caller is responsible for passing a server-known, DB-verified id.
+// absolutePath()'s traversal guard still applies as a second layer of
+// defense (throws before anything is touched if relativeDir somehow
+// resolved outside UPLOAD_ROOT). force:true makes this idempotent — a
+// directory that's already gone (or never existed) is not an error, the
+// same tolerance deleteFile/deleteDirIfEmpty already have via ENOENT.
+//
+// This replaced a previous approach of deleting known files one at a time
+// and then pruning specific subdirectories "if empty": that requires the
+// caller to know about *every* file/subdirectory a resource could ever
+// have, and missed one (a nested uploads/<assetId>/masks wrapper folder —
+// see layers.controller.js's mask relativeDir, which nests under an extra
+// literal "uploads" segment that asset photos don't), leaving orphaned
+// UUID directories on disk after a project/asset was already deleted from
+// the database. A single recursive removal of the resource's whole owned
+// subtree can't have that class of gap.
+async function removeTree(relativeDir) {
+  const full = absolutePath(relativeDir);
+  await fsp.rm(full, { recursive: true, force: true });
+}
+
 module.exports = {
   UPLOAD_ROOT,
   ensureDir,
@@ -85,4 +109,5 @@ module.exports = {
   exists,
   deleteFile,
   deleteDirIfEmpty,
+  removeTree,
 };

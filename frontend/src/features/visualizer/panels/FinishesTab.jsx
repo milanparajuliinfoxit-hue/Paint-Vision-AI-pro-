@@ -10,7 +10,7 @@ import { useVisualizerStore } from '../store/visualizerStore';
 export default function FinishesTab({ assetId }) {
   const { data: layerList = [] } = useLayersList(assetId);
   const activeLayerId = useVisualizerStore((s) => s.activeLayerId);
-  const setActiveLayerId = useVisualizerStore((s) => s.setActiveLayerId);
+  const selectLayer = useVisualizerStore((s) => s.selectLayer);
 
   const groups = useMemo(() => {
     const byFinish = new Map();
@@ -37,7 +37,7 @@ export default function FinishesTab({ assetId }) {
             {layers.map((layer) => (
               <li key={layer.id}>
                 <button
-                  onClick={() => setActiveLayerId(layer.id)}
+                  onClick={() => selectLayer(layer.id)}
                   className={`w-full text-left text-sm px-2 py-1.5 rounded-[var(--radius-sm)] truncate ${
                     activeLayerId === layer.id ? 'bg-[var(--signal)]/10 border border-[var(--signal)]' : 'hover:bg-[var(--paper)] border border-transparent'
                   }`}

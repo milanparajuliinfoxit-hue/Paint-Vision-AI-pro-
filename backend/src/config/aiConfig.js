@@ -27,9 +27,14 @@ function csvEnv(name) {
 }
 
 // capability -> provider id. Registered provider ids live in
-// src/services/ai/aiRegistry.service.js (providers/*.js).
+// src/services/ai/aiRegistry.service.js (providers/*.js). No fallback
+// default for house-understanding on purpose — there is currently no
+// registered production provider for it (local Grounding DINO + SAM2 was
+// removed; see .env), and defaulting to a heuristic here would be exactly
+// the silent mock-as-AI substitution this app's own rules forbid. Leave
+// AI_ANALYSIS_PROVIDER unset until a real provider is registered.
 const CAPABILITY_PROVIDERS = {
-  'house-understanding': process.env.AI_ANALYSIS_PROVIDER || 'mock',
+  'house-understanding': process.env.AI_ANALYSIS_PROVIDER || null,
   'paint-recommendation': process.env.AI_RECOMMENDATION_PROVIDER || 'catalog',
 };
 
@@ -43,7 +48,7 @@ function isCapabilityEnabled(capability) {
 }
 
 function getProviderFor(capability) {
-  return CAPABILITY_PROVIDERS[capability] || 'mock';
+  return CAPABILITY_PROVIDERS[capability] || null;
 }
 
 // 5-10 complete schemes per the product spec; clamp defensively.

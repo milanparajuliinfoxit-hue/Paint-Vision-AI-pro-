@@ -29,6 +29,16 @@ export const useVisualizerStore = create((set, get) => ({
 
   activeAssetId: null,
   activeLayerId: null,
+  // True only when the dealer deliberately picked this layer via the
+  // Layers/Finishes panel (selectLayer). setActiveLayerId also activates a
+  // layer as the *implicit* paint-continuation target right after it's
+  // created (handleCommitMask, useApplySurface, useConcepts) — that must
+  // NOT be treated as "the dealer chose this layer to recolor," or picking
+  // a catalog color for the *next* stroke would retroactively repaint
+  // whatever was just painted (the reported color-bleed bug). Only this
+  // flag, not activeLayerId alone, authorizes useApplyColor's recolor-the-
+  // active-layer side effect.
+  layerSelectedExplicitly: false,
 
   // The catalog color currently selected for painting — direct-paint brush
   // strokes and new layers apply this; hover-preview (Section 6.1) reads it
@@ -70,8 +80,13 @@ export const useVisualizerStore = create((set, get) => ({
   setSurfaceTolerance: (tolerance) => set({ surfaceTolerance: tolerance }),
   setAiSurfaceLock: (on) => set({ aiSurfaceLock: on }),
   setViewport: (viewport) => set({ viewport }),
-  setActiveAssetId: (id) => set({ activeAssetId: id, activeLayerId: null }),
-  setActiveLayerId: (id) => set({ activeLayerId: id }),
+  setActiveAssetId: (id) => set({ activeAssetId: id, activeLayerId: null, layerSelectedExplicitly: false }),
+  // Implicit activation — paint-continuation target, not a deliberate pick.
+  setActiveLayerId: (id) => set({ activeLayerId: id, layerSelectedExplicitly: false }),
+  // Deliberate activation — the dealer clicked this layer in the
+  // Layers/Finishes panel, so it's a legitimate target for useApplyColor's
+  // "apply this catalog color to the selected layer" behavior.
+  selectLayer: (id) => set({ activeLayerId: id, layerSelectedExplicitly: true }),
   setPendingColor: (colorId, rgb) => set({ pendingColorId: colorId, pendingColorRgb: rgb }),
   setHoverPreviewColorRgb: (rgb) => set({ hoverPreviewColorRgb: rgb }),
   setInProgressMaskCanvas: (canvas) => set({ inProgressMaskCanvas: canvas }),
@@ -81,8 +96,13 @@ export const useVisualizerStore = create((set, get) => ({
   setImageVisible: (visible) => set({ imageVisible: visible }),
   requestFit: () => set((s) => ({ fitSignal: s.fitSignal + 1 })),
 
-  // Seed the stack from persisted history on load (already-applied entries).
-  hydrateHistory: (entries) => set({ undoStack: entries, undoPointer: entries.length - 1 }),
+  // Seed the stack from persisted history on load. `pointer` is the
+  // project's persisted undo_pointer — the log itself is append-only and
+  // never records an undo/redo, so without it the only fallback is
+  // "everything in the log is applied," which is wrong for any project
+  // with an undo that wasn't followed by a redo before the last reload.
+  hydrateHistory: (entries, pointer) =>
+    set({ undoStack: entries, undoPointer: Math.min(pointer ?? entries.length - 1, entries.length - 1) }),
 
   pushCommand: (command) =>
     set((state) => ({

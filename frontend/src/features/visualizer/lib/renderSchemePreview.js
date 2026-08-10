@@ -90,7 +90,10 @@ export async function renderSchemePreview({ baseImageData, scheme, surfacesByCla
     if (!surface || surface.paintable === false || !surface.mask_path || !paint) continue;
 
     const maskUrl = assetsApi.fileUrl(surface.mask_path);
-    const maskKey = `${maskUrl}@${pw}x${ph}`;
+    // Re-analysis overwrites the same mask_path filename with new content —
+    // analysis_id in the key means a stale cache entry can't survive a
+    // re-analyze even though the URL string itself didn't change.
+    const maskKey = `${maskUrl}@${pw}x${ph}@${surface.analysis_id ?? ''}`;
     let maskData = maskCache.get(maskKey);
     if (!maskData) {
       maskData = await loadMaskImageData(maskUrl, pw, ph, signal);

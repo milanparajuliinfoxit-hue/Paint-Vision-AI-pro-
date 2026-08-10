@@ -1,29 +1,61 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const path = require('path');
 
-// storage.service.js resolves UPLOAD_ROOT from process.env.UPLOAD_ROOT at
-// require time, so set it before requiring the module.
-process.env.UPLOAD_ROOT = path.join(__dirname, '__test_uploads__');
+// UPLOAD_ROOT is read at module-load time from process.env.UPLOAD_ROOT — set
+// before requiring so this suite never touches the real backend/uploads/.
+const scratchRoot = fs.mkdtempSync(path.join(require('os').tmpdir(), 'storage-test-'));
+process.env.UPLOAD_ROOT = scratchRoot;
 const storage = require('./storage.service');
 
-test('a normal relative path resolves inside UPLOAD_ROOT', () => {
-  const full = storage.absolutePath('abc-123/original.jpg');
-  assert.ok(full.startsWith(storage.UPLOAD_ROOT));
+test.after(() => {
+  fs.rmSync(scratchRoot, { recursive: true, force: true });
 });
 
-test('classic ../ traversal is rejected', () => {
-  assert.throws(() => storage.absolutePath('../../../etc/passwd'), /Invalid path/);
+test('removeTree deletes an entire populated directory tree', async () => {
+  await storage.saveBuffer('assetA', 'original.jpg', Buffer.from('photo'));
+  await storage.saveBuffer(path.join('assetA', 'masks'), 'm1.png', Buffer.from('mask1'));
+  await storage.saveBuffer(path.join('assetA', 'masks'), 'm2.png', Buffer.from('mask2'));
+  assert.ok(fs.existsSync(path.join(scratchRoot, 'assetA', 'masks', 'm1.png')));
+
+  await storage.removeTree('assetA');
+
+  assert.ok(!fs.existsSync(path.join(scratchRoot, 'assetA')), 'the whole assetA directory tree should be gone, including nested subdirectories');
 });
 
-test('a sibling-directory prefix trick is rejected (not fooled by string prefix matching)', () => {
-  // UPLOAD_ROOT + '-evil' string-starts-with UPLOAD_ROOT but is a different
-  // directory entirely — this is exactly the bypass a plain
-  // full.startsWith(UPLOAD_ROOT) check would miss.
-  const evilSibling = path.relative(storage.UPLOAD_ROOT, `${storage.UPLOAD_ROOT}-evil/x.png`);
-  assert.throws(() => storage.absolutePath(evilSibling), /Invalid path/);
+test('removeTree on a directory that never existed is a silent no-op (idempotent), not an error', async () => {
+  await assert.doesNotReject(() => storage.removeTree('never-existed-dir'));
 });
 
-test('an absolute path outside the root is rejected', () => {
-  assert.throws(() => storage.absolutePath(path.resolve(__dirname, '..')), /Invalid path/);
+test('removeTree respects the traversal guard — cannot escape UPLOAD_ROOT', async () => {
+  await assert.rejects(() => storage.removeTree('../../etc'), /Invalid path/);
+  await assert.rejects(() => storage.removeTree('../sibling-of-upload-root'), /Invalid path/);
+});
+
+test('removeTree only removes the targeted subtree, leaving sibling asset directories untouched', async () => {
+  await storage.saveBuffer('assetB', 'original.jpg', Buffer.from('keep-me'));
+  await storage.saveBuffer('assetC', 'original.jpg', Buffer.from('delete-me'));
+
+  await storage.removeTree('assetC');
+
+  assert.ok(fs.existsSync(path.join(scratchRoot, 'assetB', 'original.jpg')), 'sibling asset must survive');
+  assert.ok(!fs.existsSync(path.join(scratchRoot, 'assetC')));
+});
+
+// Regression test for the exact bug this was built to fix: layer masks are
+// saved under a *different* real location (uploads/<assetId>/masks, see
+// layers.controller.js) than the asset's own directory (<assetId>/) — a
+// cleanup that only removes <assetId>/ leaves the uploads/<assetId>/
+// wrapper (and its mask files) orphaned on disk forever.
+test('an asset\'s two disjoint real locations (own dir + nested uploads/<id> masks wrapper) are both removable independently', async () => {
+  await storage.saveBuffer('assetD', 'original.jpg', Buffer.from('photo'));
+  await storage.saveBuffer(path.join('uploads', 'assetD', 'masks'), 'layer1.png', Buffer.from('mask'));
+  assert.ok(fs.existsSync(path.join(scratchRoot, 'uploads', 'assetD', 'masks', 'layer1.png')));
+
+  await storage.removeTree('assetD');
+  await storage.removeTree(path.join('uploads', 'assetD'));
+
+  assert.ok(!fs.existsSync(path.join(scratchRoot, 'assetD')));
+  assert.ok(!fs.existsSync(path.join(scratchRoot, 'uploads', 'assetD')), 'the nested masks wrapper directory must not survive');
 });

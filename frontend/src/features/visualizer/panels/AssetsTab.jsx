@@ -103,8 +103,12 @@ export default function AssetsTab({ projectId, activeAssetId, onSelectAsset, wid
 
   async function handleCleanup(assetId) {
     try {
-      await cleanAsset.mutateAsync({ assetId });
-      showToast('Cleanup complete.');
+      const result = await cleanAsset.mutateAsync({ assetId });
+      if (result.cleanupRejected) {
+        showToast(result.error_message || 'Cleanup was skipped to protect the house — original photo kept.', { variant: 'danger' });
+      } else {
+        showToast('Cleanup complete.');
+      }
     } catch (err) {
       showToast(`Cleanup failed: ${err.message} — you can keep working with the original photo.`, { variant: 'danger' });
     }
