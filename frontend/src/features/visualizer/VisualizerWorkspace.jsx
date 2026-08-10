@@ -9,7 +9,8 @@ import { useCatalogList } from '../catalog/useCatalogList';
 import { useVisualizerStore } from './store/visualizerStore';
 import { useImageElement } from './canvas/useImageElement';
 import { imageDataToPngBlob, mergeMasks } from './tools/maskOps';
-import { rgbToLab } from '../../shared/lib/colorEngine';
+import { rgbToLab, rgbToHex } from '../../shared/lib/colorEngine';
+import { drawToImageData, loadImageData } from '../../shared/lib/canvas';
 import { assets as assetsApi } from '../../shared/lib/api';
 import { useToast } from '../../shared/ui/toast';
 import { useMediaQuery } from '../../shared/lib/useMediaQuery';
@@ -75,12 +76,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
   const { image: baseImage, width, height, loading: imageLoading, error: imageError } = useImageElement(baseImageUrl);
   const baseImageData = useMemo(() => {
     if (!baseImage || !width || !height) return null;
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(baseImage, 0, 0, width, height);
-    return ctx.getImageData(0, 0, width, height);
+    return drawToImageData(baseImage, width, height);
   }, [baseImage, width, height]);
 
   const { data: layerList = [] } = useLayersList(activeAssetId);
@@ -103,7 +99,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
   async function getLayerMaskData(layer) {
     const cached = maskCacheRef.current.get(layer.id);
     if (cached && cached.path === layer.mask_path) return cached.imageData;
-    const imageData = await loadMaskImageData(assetsApi.fileUrl(layer.mask_path), width, height);
+    const imageData = await loadImageData(assetsApi.fileUrl(layer.mask_path), width, height);
     if (maskCacheRef.current.size >= 16) {
       maskCacheRef.current.delete(maskCacheRef.current.keys().next().value);
     }
@@ -152,7 +148,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
   }, [catalogRows]);
 
   useEffect(() => {
-    if (pendingColorRgb) onColorFocus?.(rgbToHex(pendingColorRgb));
+    if (pendingColorRgb) onColorFocus?.(rgbToHex(pendingColorRgb.r, pendingColorRgb.g, pendingColorRgb.b));
   }, [pendingColorRgb, onColorFocus]);
 
   // Global undo/redo keyboard shortcuts.
@@ -431,23 +427,3 @@ export default function VisualizerWorkspace({ onColorFocus }) {
   );
 }
 
-function loadMaskImageData(url, width, height) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, width, height);
-      resolve(ctx.getImageData(0, 0, width, height));
-    };
-    img.onerror = reject;
-    img.src = url;
-  });
-}
-
-function rgbToHex({ r, g, b }) {
-  return '#' + [r, g, b].map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('');
-}

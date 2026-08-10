@@ -1,63 +1,58 @@
 const paintsModel = require('../services/paints.model');
 const { paintSchema } = require('../services/paints.validation');
+const { asyncHandler } = require('../utils/asyncHandler');
+const { conflict, notFound, HttpError } = require('../utils/httpError');
 
-async function listPaints(req, res, next) {
-  try {
-    const { search, productLine, page, pageSize } = req.query;
-    const result = await paintsModel.list({
-      search,
-      productLine,
-      page: page ? Number(page) : 1,
-      pageSize: pageSize ? Number(pageSize) : 25,
-    });
-    res.json(result);
-  } catch (err) { next(err); }
+async function getPaintOrFail(id) {
+  const paint = await paintsModel.getById(id);
+  if (!paint) throw notFound('Paint not found');
+  return paint;
 }
 
-async function getPaint(req, res, next) {
-  try {
-    const paint = await paintsModel.getById(req.params.id);
-    if (!paint) return res.status(404).json({ error: 'Paint not found' });
-    res.json(paint);
-  } catch (err) { next(err); }
+// zod issues are part of the response body, so validation failures can't use
+// the plain message-only HttpError shape.
+function parsePaint(input) {
+  const parsed = paintSchema.safeParse(input);
+  if (!parsed.success) {
+    const err = new HttpError(400, 'Validation failed');
+    err.issues = parsed.error.issues;
+    throw err;
+  }
+  return parsed.data;
 }
 
-async function createPaint(req, res, next) {
-  try {
-    const parsed = paintSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: 'Validation failed', issues: parsed.error.issues });
-    }
-    const existing = await paintsModel.findByColorCode(parsed.data.color_code);
-    if (existing) {
-      return res.status(409).json({ error: `colorCode '${parsed.data.color_code}' already exists` });
-    }
-    const paint = await paintsModel.create(parsed.data);
-    res.status(201).json(paint);
-  } catch (err) { next(err); }
-}
+const listPaints = asyncHandler(async (req, res) => {
+  const { search, productLine, page, pageSize } = req.query;
+  const result = await paintsModel.list({
+    search,
+    productLine,
+    page: page ? Number(page) : 1,
+    pageSize: pageSize ? Number(pageSize) : 25,
+  });
+  res.json(result);
+});
 
-async function updatePaint(req, res, next) {
-  try {
-    const existing = await paintsModel.getById(req.params.id);
-    if (!existing) return res.status(404).json({ error: 'Paint not found' });
+const getPaint = asyncHandler(async (req, res) => {
+  res.json(await getPaintOrFail(req.params.id));
+});
 
-    const parsed = paintSchema.safeParse({ ...existing, ...req.body });
-    if (!parsed.success) {
-      return res.status(400).json({ error: 'Validation failed', issues: parsed.error.issues });
-    }
-    const paint = await paintsModel.update(req.params.id, parsed.data);
-    res.json(paint);
-  } catch (err) { next(err); }
-}
+const createPaint = asyncHandler(async (req, res) => {
+  const data = parsePaint(req.body);
+  const existing = await paintsModel.findByColorCode(data.color_code);
+  if (existing) throw conflict(`colorCode '${data.color_code}' already exists`);
+  res.status(201).json(await paintsModel.create(data));
+});
 
-async function deletePaint(req, res, next) {
-  try {
-    const existing = await paintsModel.getById(req.params.id);
-    if (!existing) return res.status(404).json({ error: 'Paint not found' });
-    await paintsModel.softDelete(req.params.id);
-    res.status(204).send();
-  } catch (err) { next(err); }
-}
+const updatePaint = asyncHandler(async (req, res) => {
+  const existing = await getPaintOrFail(req.params.id);
+  const data = parsePaint({ ...existing, ...req.body });
+  res.json(await paintsModel.update(req.params.id, data));
+});
+
+const deletePaint = asyncHandler(async (req, res) => {
+  await getPaintOrFail(req.params.id);
+  await paintsModel.softDelete(req.params.id);
+  res.status(204).send();
+});
 
 module.exports = { listPaints, getPaint, createPaint, updatePaint, deletePaint };

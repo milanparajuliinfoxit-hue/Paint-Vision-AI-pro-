@@ -1,5 +1,7 @@
 const pool = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
+const { findById, listByColumn } = require('./db.helpers');
+const { notFound } = require('../utils/httpError');
 
 async function createAsset({ projectId, originalPath, width, height, exifOrientation }) {
   const id = uuidv4();
@@ -11,17 +13,19 @@ async function createAsset({ projectId, originalPath, width, height, exifOrienta
   return getAsset(id);
 }
 
-async function getAsset(id) {
-  const [rows] = await pool.query('SELECT * FROM assets WHERE id = ?', [id]);
-  return rows[0] || null;
+function getAsset(id) {
+  return findById('assets', id);
 }
 
-async function listAssetsForProject(projectId) {
-  const [rows] = await pool.query(
-    'SELECT * FROM assets WHERE project_id = ? ORDER BY created_at ASC',
-    [projectId]
-  );
-  return rows;
+// Every asset-scoped route starts with the same existence check.
+async function getAssetOrFail(id) {
+  const asset = await getAsset(id);
+  if (!asset) throw notFound('Asset not found');
+  return asset;
+}
+
+function listAssetsForProject(projectId) {
+  return listByColumn('assets', 'project_id', projectId, 'created_at ASC');
 }
 
 async function updateAssetOriginalPath(id, originalPath) {
@@ -58,7 +62,7 @@ async function insertDuplicate({ id, projectId, label, originalPath, cleanedPath
 }
 
 module.exports = {
-  createAsset, getAsset, listAssetsForProject,
+  createAsset, getAsset, getAssetOrFail, listAssetsForProject,
   updateAssetOriginalPath, updateAssetStatus,
   renameAsset, deleteAsset, insertDuplicate,
 };

@@ -1,4 +1,6 @@
 const pool = require('../config/db');
+const { selectOne, selectAll, buildSetClause, assertNotStale } = require('./db.helpers');
+const { notFound } = require('../utils/httpError');
 
 async function createProject({ name, clientName, referenceNote, tags } = {}) {
   const [result] = await pool.query(
@@ -16,15 +18,21 @@ const COVER_JOIN = `
 `;
 const COVER_COLUMNS = 'cover.original_path AS cover_original_path, cover.cleaned_path AS cover_cleaned_path';
 
-async function getProject(id) {
-  const [rows] = await pool.query(
+function getProject(id) {
+  return selectOne(
     `SELECT projects.*, ${COVER_COLUMNS} FROM projects ${COVER_JOIN} WHERE projects.id = ?`,
     [id]
   );
-  return rows[0] || null;
 }
 
-async function listProjects({ search = '', status = null } = {}) {
+// Every project-scoped route starts with the same existence check.
+async function getProjectOrFail(id) {
+  const project = await getProject(id);
+  if (!project) throw notFound('Project not found');
+  return project;
+}
+
+function listProjects({ search = '', status = null } = {}) {
   const params = [];
   let where = 'WHERE 1=1';
 
@@ -37,11 +45,10 @@ async function listProjects({ search = '', status = null } = {}) {
     params.push(status);
   }
 
-  const [rows] = await pool.query(
+  return selectAll(
     `SELECT projects.*, ${COVER_COLUMNS} FROM projects ${COVER_JOIN} ${where} ORDER BY projects.updated_at DESC`,
     params
   );
-  return rows;
 }
 
 // API field name -> DB column, so PATCH bodies can stay camelCase.
@@ -58,25 +65,15 @@ async function updateProject(id, patch = {}, expectedUpdatedAt) {
   const current = await getProject(id);
   if (!current) return null;
 
-  // Last-write-wins is acceptable for single-editor scope, but surface a
-  // conflict instead of silently overwriting (requirements doc, Section 7).
-  if (expectedUpdatedAt) {
-    const currentTs = new Date(current.updated_at).getTime();
-    const expectedTs = new Date(expectedUpdatedAt).getTime();
-    if (currentTs !== expectedTs) {
-      const err = new Error('This project was updated elsewhere — reload to see the latest.');
-      err.status = 409;
-      throw err;
-    }
-  }
+  assertNotStale(current, expectedUpdatedAt, 'project');
 
-  const keys = Object.keys(patch).filter((k) => FIELD_MAP[k]);
+  const { keys, setClause, values } = buildSetClause(FIELD_MAP, patch, (key, value) =>
+    (key === 'tags' ? JSON.stringify(value) : value)
+  );
   if (keys.length === 0) return current;
 
-  const setClause = keys.map((k) => `${FIELD_MAP[k]} = ?`).join(', ');
-  const values = keys.map((k) => (k === 'tags' ? JSON.stringify(patch[k]) : patch[k]));
   await pool.query(`UPDATE projects SET ${setClause} WHERE id = ?`, [...values, id]);
   return getProject(id);
 }
 
-module.exports = { createProject, getProject, listProjects, updateProject };
+module.exports = { createProject, getProject, getProjectOrFail, listProjects, updateProject };

@@ -7,6 +7,7 @@ import StatusBadge from './statusBadge';
 import ProjectCover from './ProjectCover';
 import { Button } from '../../shared/ui/button';
 import { cn } from '../../shared/lib/cn';
+import { formatShortDateWithYear } from '../../shared/lib/formatDate';
 
 const STATUSES = ['draft', 'in_review', 'client_approved', 'archived'];
 
@@ -14,10 +15,6 @@ const STATUS_FILTERS = [
   { value: '', label: 'All' },
   ...STATUSES.map((s) => ({ value: s, label: s.replace('_', ' ') })),
 ];
-
-function formatDate(iso) {
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-}
 
 export default function ProjectsListPage() {
   const [search, setSearch] = useState('');
@@ -166,7 +163,7 @@ export default function ProjectsListPage() {
                 <div className="mt-2 truncate font-semibold">{p.name || p.client_name}</div>
                 <div className="mt-0.5 truncate text-sm text-[var(--graphite)]">{p.client_name}</div>
                 <div className="mt-3 text-xs text-[var(--graphite)]">
-                  Updated {formatDate(p.updated_at)}
+                  Updated {formatShortDateWithYear(p.updated_at)}
                 </div>
               </div>
             </button>
@@ -203,7 +200,7 @@ export default function ProjectsListPage() {
                   </td>
                   <td className="py-3 pr-4 text-[var(--graphite)]">{p.client_name}</td>
                   <td className="py-3 pr-4"><StatusBadge status={p.status} /></td>
-                  <td className="py-3 pr-4 text-[var(--graphite)]">{formatDate(p.updated_at)}</td>
+                  <td className="py-3 pr-4 text-[var(--graphite)]">{formatShortDateWithYear(p.updated_at)}</td>
                   <td className="py-3 pr-4 text-right">
                     <ArrowRight
                       size={15}

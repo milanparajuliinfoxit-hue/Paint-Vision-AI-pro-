@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { loadImage } from '../../../shared/lib/canvas';
 
 const MAX_DIMENSION = 1600; // client-side downscale cap, keeps canvas ops fast
 
@@ -16,21 +17,20 @@ export function useImageElement(url) {
     let cancelled = false;
     setState((s) => ({ ...s, loading: true, error: null }));
 
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      if (cancelled) return;
-      const scale = Math.min(1, MAX_DIMENSION / Math.max(img.width, img.height));
-      setState({
-        image: img,
-        width: Math.round(img.width * scale),
-        height: Math.round(img.height * scale),
-        loading: false,
-        error: null,
-      });
-    };
-    img.onerror = () => !cancelled && setState({ image: null, width: 0, height: 0, loading: false, error: new Error('Image failed to load') });
-    img.src = url;
+    loadImage(url).then(
+      (img) => {
+        if (cancelled) return;
+        const scale = Math.min(1, MAX_DIMENSION / Math.max(img.width, img.height));
+        setState({
+          image: img,
+          width: Math.round(img.width * scale),
+          height: Math.round(img.height * scale),
+          loading: false,
+          error: null,
+        });
+      },
+      (error) => !cancelled && setState({ image: null, width: 0, height: 0, loading: false, error })
+    );
 
     return () => { cancelled = true; };
   }, [url]);

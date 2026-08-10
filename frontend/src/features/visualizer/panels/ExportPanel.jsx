@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../../../
 import { Button } from '../../../shared/ui/button';
 import ComparisonPreview from './ComparisonPreview';
 import { applyPaintColor } from '../../../shared/lib/colorEngine';
+import { canvasFromImageData, createCanvas, loadImage, loadImageData } from '../../../shared/lib/canvas';
 import { exportsApi, assets as assetsApi } from '../../../shared/lib/api';
 import { useToast } from '../../../shared/ui/toast';
 
@@ -35,21 +36,13 @@ export default function ExportPanel({
     let cancelled = false;
 
     (async () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
+      const canvas = createCanvas(width, height);
       const ctx = canvas.getContext('2d');
       ctx.drawImage(baseImage, 0, 0, width, height);
 
       const visibleLayers = [...layers].filter((l) => l.visible && l.mask_path).sort((a, b) => a.order_index - b.order_index);
       for (const layer of visibleLayers) {
-        const maskImg = await loadImg(assetsApi.fileUrl(layer.mask_path));
-        const maskCanvas = document.createElement('canvas');
-        maskCanvas.width = width;
-        maskCanvas.height = height;
-        const maskCtx = maskCanvas.getContext('2d');
-        maskCtx.drawImage(maskImg, 0, 0, width, height);
-        const maskData = maskCtx.getImageData(0, 0, width, height);
+        const maskData = await loadImageData(assetsApi.fileUrl(layer.mask_path), width, height);
 
         const rgb = colorLookup(layer.current_color_id) || { r: 47, g: 93, b: 138 };
         // Same parameters as LayerNode so the exported file matches what the
@@ -61,10 +54,7 @@ export default function ExportPanel({
           lightnessBlend: painted ? 0.45 : 0,
         });
 
-        const layerCanvas = document.createElement('canvas');
-        layerCanvas.width = width;
-        layerCanvas.height = height;
-        layerCanvas.getContext('2d').putImageData(recolored, 0, 0);
+        const layerCanvas = canvasFromImageData(recolored);
         ctx.globalAlpha = Number(layer.opacity ?? 1);
         ctx.drawImage(layerCanvas, 0, 0);
         ctx.globalAlpha = 1;
@@ -139,25 +129,12 @@ export default function ExportPanel({
 }
 
 async function composeSideBySide(originalUrl, paintedDataUrl) {
-  const [orig, painted] = await Promise.all([loadImg(originalUrl), loadImg(paintedDataUrl)]);
-  const h = Math.max(orig.height, painted.height);
-  const canvas = document.createElement('canvas');
-  canvas.width = orig.width + painted.width;
-  canvas.height = h;
+  const [orig, painted] = await Promise.all([loadImage(originalUrl), loadImage(paintedDataUrl)]);
+  const canvas = createCanvas(orig.width + painted.width, Math.max(orig.height, painted.height));
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = 'white';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(orig, 0, 0);
   ctx.drawImage(painted, orig.width, 0);
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
-}
-
-function loadImg(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = src;
-  });
 }

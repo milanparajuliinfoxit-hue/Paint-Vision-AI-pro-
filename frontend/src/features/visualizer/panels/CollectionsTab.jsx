@@ -33,7 +33,7 @@ export default function CollectionsTab({ projectId, assetId }) {
       togglePaintInCollection(active.id, paint.id);
       return;
     }
-    markRecentlyUsed({ id: paint.id, color_name: paint.color_name, color_code: paint.color_code, hex_value: paint.hex_value });
+    markRecentlyUsed(paint);
     pickColor(paint);
   }
 

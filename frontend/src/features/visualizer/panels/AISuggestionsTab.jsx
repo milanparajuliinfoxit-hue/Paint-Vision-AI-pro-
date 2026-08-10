@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { extractContextColors, suggestColors } from '../../../shared/lib/colorSuggest';
 import { assets as assetsApi } from '../../../shared/lib/api';
+import { loadImageData } from '../../../shared/lib/canvas';
 import { useLayersList } from '../hooks/useLayers';
 import { useHistoryCommand } from '../hooks/useHistoryCommand';
 import { useVisualizerStore } from '../store/visualizerStore';
@@ -25,13 +26,7 @@ export default function AISuggestionsTab({ projectId, assetId, baseImageData, wi
     if (!baseImageData || !activeLayer?.mask_path) return;
     setLoading(true);
     try {
-      const maskImg = await loadImage(assetsApi.fileUrl(activeLayer.mask_path));
-      const maskCanvas = document.createElement('canvas');
-      maskCanvas.width = width;
-      maskCanvas.height = height;
-      const ctx = maskCanvas.getContext('2d');
-      ctx.drawImage(maskImg, 0, 0, width, height);
-      const maskData = ctx.getImageData(0, 0, width, height);
+      const maskData = await loadImageData(assetsApi.fileUrl(activeLayer.mask_path), width, height);
 
       const context = extractContextColors(baseImageData, maskData);
       setSuggestions(suggestColors(context, catalogData?.rows || [], 6));
@@ -80,14 +75,4 @@ export default function AISuggestionsTab({ projectId, assetId, baseImageData, wi
       )}
     </div>
   );
-}
-
-function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = src;
-  });
 }

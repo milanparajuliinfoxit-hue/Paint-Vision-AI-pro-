@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Image as KonvaImage } from 'react-konva';
 import { applyPaintColor } from '../../../shared/lib/colorEngine';
+import { canvasFromImageData, drawToImageData } from '../../../shared/lib/canvas';
 import { useImageElement } from './useImageElement';
 
 const PREVIEW_TINT = { r: 47, g: 93, b: 138 }; // --signal, used only for the unpainted mask preview
@@ -27,12 +28,7 @@ export default function LayerNode({ layer, baseImageData, width, height, colorRg
     // component does. A same-frame superseding update cancels the stale one
     // before it ever runs, so only the latest color actually gets computed.
     const rafId = requestAnimationFrame(() => {
-      const maskCanvas = document.createElement('canvas');
-      maskCanvas.width = width;
-      maskCanvas.height = height;
-      const maskCtx = maskCanvas.getContext('2d');
-      maskCtx.drawImage(maskImage, 0, 0, width, height);
-      const maskData = maskCtx.getImageData(0, 0, width, height);
+      const maskData = drawToImageData(maskImage, width, height);
 
       const targetRgb = colorRgb || PREVIEW_TINT;
       // Painted layers get near-full pigment coverage that re-anchors the
@@ -45,11 +41,7 @@ export default function LayerNode({ layer, baseImageData, width, height, colorRg
         lightnessBlend: painted ? 0.45 : 0,
       });
 
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      canvas.getContext('2d').putImageData(result, 0, 0);
-      setBitmap(canvas);
+      setBitmap(canvasFromImageData(result));
     });
 
     return () => cancelAnimationFrame(rafId);

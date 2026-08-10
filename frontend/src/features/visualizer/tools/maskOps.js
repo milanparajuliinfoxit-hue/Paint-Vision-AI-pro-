@@ -1,3 +1,5 @@
+import { canvasFromImageData, canvasToPngBlob, createCanvas } from '../../../shared/lib/canvas';
+
 // Pure mask-rasterization helpers — each returns an ImageData whose alpha
 // channel is the selection strength (0-255), same contract colorEngine.js
 // already expects. No Konva/DOM coupling here so these stay unit-testable.
@@ -13,14 +15,9 @@ export function createEmptyMask(width, height) {
 // blurring them along with alpha is harmless.
 export function featherMask(mask, radiusPx) {
   if (!radiusPx) return mask;
-  const src = document.createElement('canvas');
-  src.width = mask.width;
-  src.height = mask.height;
-  src.getContext('2d').putImageData(mask, 0, 0);
+  const src = canvasFromImageData(mask);
 
-  const out = document.createElement('canvas');
-  out.width = mask.width;
-  out.height = mask.height;
+  const out = createCanvas(mask.width, mask.height);
   const octx = out.getContext('2d');
   octx.filter = `blur(${radiusPx}px)`;
   octx.drawImage(src, 0, 0);
@@ -46,9 +43,7 @@ export function rasterizeRect(width, height, x0, y0, x1, y1) {
 // browser's own rasterizer is both simpler and more correct than a hand
 // rolled scanline fill).
 export function rasterizePolygon(width, height, points) {
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
+  const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = 'white';
   ctx.beginPath();
@@ -108,9 +103,7 @@ function strokeSmoothPath(ctx, points) {
 // raw footprint (used by the surface-aware brush, which clips the footprint
 // against the image before applying its own edge).
 export function rasterizeBrushStroke(width, height, points, brushSize, opts = {}) {
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
+  const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = 'white';
   ctx.strokeStyle = 'white';
@@ -352,9 +345,5 @@ export function floodFillMask(imageData, startX, startY, tolerance, rgbToLab) {
 }
 
 export function imageDataToPngBlob(imageData) {
-  const canvas = document.createElement('canvas');
-  canvas.width = imageData.width;
-  canvas.height = imageData.height;
-  canvas.getContext('2d').putImageData(imageData, 0, 0);
-  return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+  return canvasToPngBlob(canvasFromImageData(imageData));
 }

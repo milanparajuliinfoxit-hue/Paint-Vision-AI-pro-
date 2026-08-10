@@ -1,20 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { layers } from '../../../shared/lib/api';
+import { useInvalidatingMutation } from '../../../shared/lib/useInvalidatingMutation';
+
+const layersKey = (assetId) => ['layers', assetId];
 
 export function useLayersList(assetId) {
   return useQuery({
-    queryKey: ['layers', assetId],
+    queryKey: layersKey(assetId),
     queryFn: () => layers.list(assetId),
     enabled: !!assetId,
   });
 }
 
 export function useCreateLayer(assetId) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ fields, maskBlob }) => layers.create(assetId, fields, maskBlob),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['layers', assetId] }),
-  });
+  return useInvalidatingMutation(
+    ({ fields, maskBlob }) => layers.create(assetId, fields, maskBlob),
+    layersKey(assetId)
+  );
 }
 
 // Optimistic: the cache updates synchronously so the Konva canvas re-renders
@@ -25,35 +27,27 @@ export function useUpdateLayer(assetId) {
   return useMutation({
     mutationFn: ({ layerId, patch, updatedAt, maskBlob }) => layers.update(layerId, patch, updatedAt, maskBlob),
     onMutate: async ({ layerId, patch }) => {
-      await queryClient.cancelQueries({ queryKey: ['layers', assetId] });
-      const previous = queryClient.getQueryData(['layers', assetId]);
-      queryClient.setQueryData(['layers', assetId], (old = []) =>
+      await queryClient.cancelQueries({ queryKey: layersKey(assetId) });
+      const previous = queryClient.getQueryData(layersKey(assetId));
+      queryClient.setQueryData(layersKey(assetId), (old = []) =>
         old.map((l) => (l.id === layerId ? { ...l, ...toSnakeCasePatch(patch) } : l))
       );
       return { previous };
     },
     onError: (err, _vars, context) => {
-      if (context?.previous) queryClient.setQueryData(['layers', assetId], context.previous);
+      if (context?.previous) queryClient.setQueryData(layersKey(assetId), context.previous);
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['layers', assetId] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: layersKey(assetId) }),
   });
 }
 
 export function useDeleteLayer(assetId) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (layerId) => layers.remove(layerId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['layers', assetId] }),
-  });
+  return useInvalidatingMutation((layerId) => layers.remove(layerId), layersKey(assetId));
 }
 
 // Undo of a delete / redo of a create — brings a soft-deleted layer back.
 export function useRestoreLayer(assetId) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (layerId) => layers.restore(layerId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['layers', assetId] }),
-  });
+  return useInvalidatingMutation((layerId) => layers.restore(layerId), layersKey(assetId));
 }
 
 // The API patch body is camelCase; the cached rows (straight from MySQL) are

@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { selectOne, selectAll } = require('./db.helpers');
 
 const PRODUCT_LINE_FIELDS = [
   'tenprotect', 'brightshine', 'colorfuleco', 'jotashield',
@@ -18,7 +19,7 @@ async function list({ search = '', productLine = null, page = 1, pageSize = 25 }
     where += ` AND ${productLine} = 1`;
   }
 
-  const [rows] = await pool.query(
+  const rows = await selectAll(
     `SELECT * FROM paints ${where} ORDER BY color_name ASC LIMIT ? OFFSET ?`,
     [...params, Number(pageSize), Number(offset)]
   );
@@ -30,12 +31,8 @@ async function list({ search = '', productLine = null, page = 1, pageSize = 25 }
   return { rows, total, page: Number(page), pageSize: Number(pageSize) };
 }
 
-async function getById(id) {
-  const [rows] = await pool.query(
-    'SELECT * FROM paints WHERE id = ? AND is_deleted = 0',
-    [id]
-  );
-  return rows[0] || null;
+function getById(id) {
+  return selectOne('SELECT * FROM paints WHERE id = ? AND is_deleted = 0', [id]);
 }
 
 async function create(data) {
@@ -69,12 +66,8 @@ async function softDelete(id) {
 }
 
 // Used by Excel import — matches on color_code.
-async function findByColorCode(colorCode) {
-  const [rows] = await pool.query(
-    'SELECT * FROM paints WHERE color_code = ? AND is_deleted = 0',
-    [colorCode]
-  );
-  return rows[0] || null;
+function findByColorCode(colorCode) {
+  return selectOne('SELECT * FROM paints WHERE color_code = ? AND is_deleted = 0', [colorCode]);
 }
 
 function toColumnValue(data, col) {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { catalog } from '../../shared/lib/api';
-import { rgbToLab, hexToRgb, labDistance } from '../../shared/lib/colorEngine';
+import { rgbToLab, rgbToHex, hexToRgb, labDistance } from '../../shared/lib/colorEngine';
 import ImportModal from './ImportModal';
 import PaintCard from './PaintCard';
 import { useFavorites } from './useFavorites';
@@ -62,7 +62,7 @@ export default function CatalogPage({ onColorFocus }) {
 
   function pickColor(paint) {
     onColorFocus(paint.hex_value);
-    markRecentlyUsed({ id: paint.id, color_name: paint.color_name, color_code: paint.color_code, hex_value: paint.hex_value });
+    markRecentlyUsed(paint);
   }
 
   // Arrow-key grid navigation (requirements doc, Section 12: "arrow through
@@ -247,10 +247,6 @@ function Field({ label, children }) {
       <div style={{ marginTop: 2 }}>{children}</div>
     </label>
   );
-}
-
-function rgbToHex(r, g, b) {
-  return '#' + [r, g, b].map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('');
 }
 
 const input = { padding: '8px 10px', border: '1px solid var(--line)', borderRadius: 'var(--radius-sm)', fontFamily: 'inherit' };

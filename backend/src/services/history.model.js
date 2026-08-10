@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { findById, listByColumn } = require('./db.helpers');
 
 async function appendEntry({ projectId, action, beforeState, afterState }) {
   const [result] = await pool.query(
@@ -10,16 +11,11 @@ async function appendEntry({ projectId, action, beforeState, afterState }) {
       afterState !== undefined ? JSON.stringify(afterState) : null,
     ]
   );
-  const [rows] = await pool.query('SELECT * FROM history_entries WHERE id = ?', [result.insertId]);
-  return rows[0];
+  return findById('history_entries', result.insertId);
 }
 
-async function listForProject(projectId) {
-  const [rows] = await pool.query(
-    'SELECT * FROM history_entries WHERE project_id = ? ORDER BY created_at ASC, id ASC',
-    [projectId]
-  );
-  return rows;
+function listForProject(projectId) {
+  return listByColumn('history_entries', 'project_id', projectId, 'created_at ASC, id ASC');
 }
 
 module.exports = { appendEntry, listForProject };

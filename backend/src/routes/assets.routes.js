@@ -1,10 +1,10 @@
 const express = require('express');
-const multer = require('multer');
 const router = express.Router();
+const { memoryUpload } = require('../middleware/upload.middleware');
 const ctrl = require('../controllers/assets.controller');
 const assetLayersRoutes = require('./assetLayers.routes');
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+const upload = memoryUpload(25);
 
 router.get('/:assetId', ctrl.getAsset);
 router.patch('/:assetId', ctrl.renameAsset);

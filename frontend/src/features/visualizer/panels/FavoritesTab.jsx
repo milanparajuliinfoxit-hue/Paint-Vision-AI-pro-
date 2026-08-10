@@ -14,7 +14,7 @@ export default function FavoritesTab({ projectId, assetId }) {
   const rows = useMemo(() => (catalogData?.rows || []).filter((p) => isFavorite(p.id)), [catalogData, isFavorite]);
 
   function pick(paint) {
-    markRecentlyUsed({ id: paint.id, color_name: paint.color_name, color_code: paint.color_code, hex_value: paint.hex_value });
+    markRecentlyUsed(paint);
     pickColor(paint);
   }
 
