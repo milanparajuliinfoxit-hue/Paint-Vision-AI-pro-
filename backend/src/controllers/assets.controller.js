@@ -1,4 +1,4 @@
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const storage = require('../services/storage.service');
 const assetsModel = require('../services/assets.model');
 const projectsModel = require('../services/projects.model');
@@ -123,7 +123,7 @@ async function duplicateAsset(req, res, next) {
     const asset = await assetsModel.getAsset(req.params.assetId);
     if (!asset) return res.status(404).json({ error: 'Asset not found' });
 
-    const newId = uuidv4();
+    const newId = crypto.randomUUID();
     const originalPath = storage.saveBuffer(newId, 'original.jpg', storage.readFile(asset.original_path));
     const cleanedPath = asset.cleaned_path
       ? storage.saveBuffer(newId, 'cleaned.jpg', storage.readFile(asset.cleaned_path))

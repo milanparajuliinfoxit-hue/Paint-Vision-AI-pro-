@@ -11,24 +11,35 @@ const path = require('path');
 const UPLOAD_ROOT = path.resolve(process.env.UPLOAD_ROOT || './uploads');
 
 function ensureDir(relativeDir) {
-  const full = path.join(UPLOAD_ROOT, relativeDir);
+  const full = absolutePath(relativeDir);
   fs.mkdirSync(full, { recursive: true });
   return full;
 }
 
 function absolutePath(relativePath) {
-  const full = path.join(UPLOAD_ROOT, relativePath);
-  // Guard against path traversal outside the upload root.
-  if (!full.startsWith(UPLOAD_ROOT)) {
-    throw new Error('Invalid path');
+  if (typeof relativePath !== 'string' || relativePath.length === 0 || relativePath.includes('\0')) {
+    const err = new Error('Invalid path');
+    err.status = 400;
+    throw err;
+  }
+  const full = path.resolve(UPLOAD_ROOT, relativePath);
+  // Guard against path traversal outside the upload root. A string prefix
+  // check is not enough (`/data/uploads-old` shares the prefix of
+  // `/data/uploads`), so compare the resolved relative path instead.
+  const rel = path.relative(UPLOAD_ROOT, full);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    const err = new Error('Invalid path');
+    err.status = 400;
+    throw err;
   }
   return full;
 }
 
 function saveBuffer(relativeDir, filename, buffer) {
-  const dir = ensureDir(relativeDir);
   const relativePath = path.join(relativeDir, filename);
-  fs.writeFileSync(path.join(dir, filename), buffer);
+  const target = absolutePath(relativePath); // rejects anything outside UPLOAD_ROOT
+  ensureDir(relativeDir);
+  fs.writeFileSync(target, buffer);
   return relativePath;
 }
 
@@ -37,12 +48,17 @@ function readFile(relativePath) {
 }
 
 function exists(relativePath) {
-  return fs.existsSync(absolutePath(relativePath));
+  try {
+    return fs.existsSync(absolutePath(relativePath));
+  } catch {
+    return false; // paths outside the upload root simply don't exist as far as callers are concerned
+  }
 }
 
 function deleteFile(relativePath) {
+  if (!exists(relativePath)) return;
   const full = absolutePath(relativePath);
-  if (fs.existsSync(full)) fs.unlinkSync(full);
+  if (fs.statSync(full).isFile()) fs.unlinkSync(full);
 }
 
 // Removes a folder if it's now empty — called after deleting the last file
