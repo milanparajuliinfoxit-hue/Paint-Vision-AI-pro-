@@ -32,7 +32,7 @@ async function create(req, res, next) {
     const job = await exportsModel.createExportJob({ projectId: project.id, format, comparisonMode });
     const relativeDir = path.join('uploads', 'projects', String(project.id), 'exports');
     const ext = format === 'png' ? 'png' : 'jpg';
-    const relativePath = storage.saveBuffer(relativeDir, `export_${job.id}.${ext}`, req.file.buffer);
+    const relativePath = await storage.saveBuffer(relativeDir, `export_${job.id}.${ext}`, req.file.buffer);
 
     const updated = await exportsModel.markReady(job.id, relativePath);
     res.status(201).json(updated);

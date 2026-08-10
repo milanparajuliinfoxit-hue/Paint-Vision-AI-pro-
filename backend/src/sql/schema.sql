@@ -70,6 +70,15 @@ CREATE TABLE IF NOT EXISTS projects (
     status          ENUM('draft','in_review','client_approved','archived') NOT NULL DEFAULT 'draft',
     cover_asset_id  VARCHAR(36) NULL,
     tags            JSON NULL,
+    -- Index into this project's history_entries the client's local undo
+    -- stack was last positioned at (-1 = nothing applied). Undo/redo apply
+    -- their mutation instantly and locally, then mirror to history_entries
+    -- for the log — but the log is append-only and never records an
+    -- undo/redo itself, so without a persisted pointer a page reload has no
+    -- way to know how far back the user had undone and re-derives the
+    -- pointer as "everything in the log is applied," which is wrong
+    -- whenever anything was undone and not redone before reload.
+    undo_pointer    INT NOT NULL DEFAULT -1,
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     -- Millisecond precision: the PATCH conflict check (Section 7) compares
     -- updated_at against a client-held value, and second-resolution
@@ -107,6 +116,9 @@ CREATE TABLE IF NOT EXISTS layers (
     current_color_id    INT NULL,
     opacity             DECIMAL(4,3) NOT NULL DEFAULT 1.000,
     finish_override     VARCHAR(50) NULL,
+    ai_surface_key      VARCHAR(80) NULL,          -- links a layer to a detected_surfaces.class_key from AI analysis
+    ai_analysis_id      INT NULL,                  -- ai_jobs.id that produced the surface; (ai_analysis_id, ai_surface_key) is the idempotency key for AI layer applies
+    ai_scheme_id        INT NULL,                  -- paint_recommendations.id that mapped the color, when the layer came from a scheme apply
     order_index         INT NOT NULL DEFAULT 0,
     locked              TINYINT(1) NOT NULL DEFAULT 0,
     visible             TINYINT(1) NOT NULL DEFAULT 1,
@@ -114,7 +126,12 @@ CREATE TABLE IF NOT EXISTS layers (
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at          TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     CONSTRAINT fk_layer_asset FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
-    CONSTRAINT fk_layer_paint FOREIGN KEY (current_color_id) REFERENCES paints(id) ON DELETE SET NULL
+    CONSTRAINT fk_layer_paint FOREIGN KEY (current_color_id) REFERENCES paints(id) ON DELETE SET NULL,
+    -- One AI layer per surface per analysis: re-applying a scheme/analysis
+    -- updates the existing row in place instead of inserting duplicates
+    -- (NULL ai_analysis_id rows — hand-drawn layers — are untouched by MySQL's
+    -- UNIQUE semantics, which treat NULLs as distinct).
+    UNIQUE KEY uq_layers_ai_surface (ai_analysis_id, ai_surface_key)
 ) ENGINE=InnoDB;
 
 -- Append-only undo/redo log, persisted per project so history survives a
@@ -153,4 +170,94 @@ CREATE TABLE IF NOT EXISTS export_jobs (
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     CONSTRAINT fk_export_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------
+-- AI Understanding Module — structured house understanding.
+-- The AI layer never invents colors or paints: every recommendation maps
+-- surfaces to paints that exist in the `paints` catalog. Mask pixels stay on
+-- disk as alpha PNGs (via storage.service) — these tables hold metadata only.
+--
+-- ai_jobs is the versioned audit log for every AI capability run: which
+-- provider produced it, which model version, confidence, timing, and failure
+-- reason, so every AI result is explainable and replaceable.
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_jobs (
+    id                  INT AUTO_INCREMENT PRIMARY KEY,
+    asset_id            VARCHAR(36) NOT NULL,
+    job_type            ENUM('house-understanding','paint-recommendation') NOT NULL,
+    provider            VARCHAR(50) NOT NULL,
+    model_version       VARCHAR(100) NULL,
+    status              ENUM('running','succeeded','failed') NOT NULL DEFAULT 'running',
+    confidence          DECIMAL(5,4) NULL,
+    processing_time_ms  INT NULL,
+    failure_reason      VARCHAR(500) NULL,
+    output_json         JSON NULL,
+    -- Generated column: job_type while status='running', NULL otherwise.
+    -- MySQL unique indexes don't enforce uniqueness across NULLs, so
+    -- uq_ai_jobs_running below only ever rejects a second 'running' row for
+    -- the same (asset_id, job_type) — a real database constraint against
+    -- duplicate concurrent AI runs, correct even across multiple app
+    -- instances (an in-process lock, e.g. inFlightLock.service.js, is not:
+    -- it only protects a single Node process).
+    running_claim       VARCHAR(30) GENERATED ALWAYS AS (CASE WHEN status = 'running' THEN job_type ELSE NULL END) STORED,
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    CONSTRAINT fk_ai_job_asset FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
+    KEY idx_ai_job_asset (asset_id),
+    UNIQUE KEY uq_ai_jobs_running (asset_id, running_claim)
+) ENGINE=InnoDB;
+
+-- Painatable / non-paintable surface regions detected in a photo. `paintable`
+-- is the hard guard the UI/brush tooling reads: never paint a non-paintable
+-- surface, never lock a layer to a roof.
+CREATE TABLE IF NOT EXISTS detected_surfaces (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    analysis_id     INT NOT NULL,
+    asset_id        VARCHAR(36) NOT NULL,
+    class_key       VARCHAR(50) NOT NULL,
+    display_name    VARCHAR(150) NULL,
+    paintable       TINYINT(1) NOT NULL DEFAULT 1,
+    confidence      DECIMAL(5,4) NULL,
+    mask_path       VARCHAR(500) NULL,
+    geometry        JSON NULL,
+    average_color   JSON NULL,
+    properties      JSON NULL,
+    CONSTRAINT fk_surface_analysis FOREIGN KEY (analysis_id) REFERENCES ai_jobs(id) ON DELETE CASCADE,
+    CONSTRAINT fk_surface_asset FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
+    KEY idx_surface_asset (asset_id)
+) ENGINE=InnoDB;
+
+-- Removable obstructions (trees, cars, people, garden furniture, ...) — not
+-- paintable, candidates for the object-removal proxy.
+CREATE TABLE IF NOT EXISTS detected_objects (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    analysis_id     INT NOT NULL,
+    asset_id        VARCHAR(36) NOT NULL,
+    class_key       VARCHAR(50) NOT NULL,
+    display_name    VARCHAR(150) NULL,
+    confidence      DECIMAL(5,4) NULL,
+    mask_path       VARCHAR(500) NULL,
+    geometry        JSON NULL,
+    CONSTRAINT fk_object_analysis FOREIGN KEY (analysis_id) REFERENCES ai_jobs(id) ON DELETE CASCADE,
+    CONSTRAINT fk_object_asset FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
+    KEY idx_object_asset (asset_id)
+) ENGINE=InnoDB;
+
+-- Persisted generated paint schemes. scheme_json holds the role→surface→paint
+-- mapping; colors are always catalog paint IDs resolved to full paint objects
+-- by the API on read. status tracks whether the dealer applied a scheme.
+CREATE TABLE IF NOT EXISTS paint_recommendations (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    project_id      INT NOT NULL,
+    asset_id        VARCHAR(36) NOT NULL,
+    scheme_name     VARCHAR(150) NOT NULL,
+    tagline         VARCHAR(255) NULL,
+    rationale       JSON NULL,
+    scheme_json     JSON NOT NULL,
+    status          ENUM('draft','applied') NOT NULL DEFAULT 'draft',
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_reco_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    CONSTRAINT fk_reco_asset FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
+    KEY idx_reco_asset (asset_id)
 ) ENGINE=InnoDB;

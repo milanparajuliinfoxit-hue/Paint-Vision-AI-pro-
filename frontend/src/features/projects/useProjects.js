@@ -34,3 +34,26 @@ export function useUpdateProject(projectId) {
     },
   });
 }
+
+// Best-effort bookmark of the local undo stack's position (see backend
+// projects.model.js's setUndoPointer) — updates the cache directly instead
+// of invalidating so rapid undo/redo/jump clicks don't each trigger a
+// project refetch.
+export function useSetUndoPointer(projectId) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (pointer) => projects.setUndoPointer(projectId, pointer),
+    onSuccess: (updated) => queryClient.setQueryData(['project', projectId], updated),
+  });
+}
+
+export function useDeleteProject() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (projectId) => projects.remove(projectId),
+    onSuccess: (_deleted, projectId) => {
+      queryClient.removeQueries({ queryKey: ['project', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+    },
+  });
+}

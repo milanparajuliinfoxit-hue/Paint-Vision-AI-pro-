@@ -30,12 +30,16 @@ async function previewImport(buffer) {
       continue;
     }
 
-    const existing = await paintsModel.findByColorCode(parsed.data.color_code);
+    // includeDeleted so a re-import of a previously soft-deleted color is
+    // classified as 'update' (which revives it) rather than 'create', which
+    // would otherwise hit the color_code unique constraint mid-commit.
+    const existing = await paintsModel.findByColorCode(parsed.data.color_code, { includeDeleted: true });
     report.valid.push({
       row: rowNum,
       data: parsed.data,
       action: existing ? 'update' : 'create',
       existingId: existing ? existing.id : null,
+      revives: !!(existing && existing.is_deleted),
     });
   }
 
@@ -68,14 +72,14 @@ async function commitImport({ validRows, fileName, duplicateStrategy = 'update' 
           continue;
         }
         if (duplicateStrategy === 'create_new') {
-          await paintsModel.create(row.data);
+          await paintsModel.create(row.data, conn);
           created++;
           continue;
         }
-        await paintsModel.update(row.existingId, row.data);
+        await paintsModel.update(row.existingId, row.data, conn);
         updated++;
       } else {
-        await paintsModel.create(row.data);
+        await paintsModel.create(row.data, conn);
         created++;
       }
     }
@@ -89,6 +93,18 @@ async function commitImport({ validRows, fileName, duplicateStrategy = 'update' 
     await conn.commit();
   } catch (err) {
     await conn.rollback();
+    // Found by actually running an import with an in-batch duplicate SKU
+    // (two rows sharing a color_code, both classified 'create' since
+    // neither exists yet — preview can't see the batch's own duplicates):
+    // the raw MySQL constraint message ("Duplicate entry 'X' for key
+    // 'paints.uq_color_code'") was reaching the API response unfiltered.
+    // The whole batch is already correctly rolled back above; this only
+    // changes what the dealer sees about why.
+    if (err.code === 'ER_DUP_ENTRY') {
+      const clean = new Error('Import failed — the file has more than one row with the same color code. Fix the duplicate and re-import; nothing was changed.');
+      clean.status = 409;
+      throw clean;
+    }
     throw err;
   } finally {
     conn.release();
@@ -120,9 +136,10 @@ function exportToBuffer(paints) {
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 }
 
-// Maps the exact source Excel headers to our DB column names.
-// NOTE: the source file's `id` column is ambiguous with our own auto-increment PK.
-// We treat the Excel `id` as ignorable and `s_id` as the traceable source id — confirm this is correct.
+// Maps the exact source Excel headers to our DB column names. The source
+// file's `id` column is the exporting system's own row number and is
+// intentionally dropped (see EXCEL_COLUMN_MAP note); `s_id` is the real,
+// stable source-product identifier and is what we import and match on.
 function mapRow(rawRow) {
   const mapped = {};
   for (const [excelKey, dbKey] of Object.entries(EXCEL_COLUMN_MAP)) {

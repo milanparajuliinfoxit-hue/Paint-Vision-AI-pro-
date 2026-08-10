@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useVisualizerStore } from '../store/visualizerStore';
-import { rasterizeRect, rasterizePolygon, rasterizeBrushStroke, surfaceAwareBrushStroke, floodFillMask } from './maskOps';
+import { rasterizeRect, rasterizePolygon, rasterizeBrushStroke, surfaceAwareBrushStroke, floodFillMask, clipMaskToConstraint, pickSurfaceAtPoint } from './maskOps';
 import { rgbToLab } from '../../../shared/lib/colorEngine';
 
 // Owns the transient, in-progress interaction for whichever tool is active
@@ -8,13 +8,29 @@ import { rgbToLab } from '../../../shared/lib/colorEngine';
 // resolve to a finished mask handed to onCommitMask (requirements doc,
 // Section 5.2); color application itself happens on catalog click
 // (useApplyColor), not through a canvas tool.
-export function useToolInteraction({ width, height, baseImageData, onCommitMask, onEyedropper }) {
+//
+// `constraintAlpha` (optional Uint8Array, full image size) clips brush
+// strokes to an AI-detected surface mask — the surface lock — so paint on an
+// ai-surface layer physically cannot escape the detected surface.
+//
+// `surfaceMasks` (from useSurfaceAlphaGrids) backs the surface-pick tool: a
+// click resolves to the paintable surface under the cursor and is handed to
+// onSurfacePick, which paints the whole surface as an idempotent AI layer.
+// `houseAlpha` (optional Uint8Array, full image size) is the union of every
+// AI-detected surface's mask — when present, Magic Wand's flood fill can
+// never cross outside it, however close the colors are on either side
+// (house-aware selection). Absent when no analysis has been run yet; the
+// tool still falls back to its own boundary-aware color/step tolerance.
+export function useToolInteraction({
+  width, height, baseImageData, onCommitMask, onEyedropper, constraintAlpha, surfaceMasks, onSurfacePick, houseAlpha,
+}) {
   const activeTool = useVisualizerStore((s) => s.activeTool);
   const brushMode = useVisualizerStore((s) => s.brushMode);
   const brushSize = useVisualizerStore((s) => s.brushSize);
   const magicWandTolerance = useVisualizerStore((s) => s.magicWandTolerance);
   const surfaceAware = useVisualizerStore((s) => s.surfaceAware);
   const surfaceTolerance = useVisualizerStore((s) => s.surfaceTolerance);
+  const maskRefineMode = useVisualizerStore((s) => s.maskRefineMode);
 
   const [dragStart, setDragStart] = useState(null);
   const [dragCurrent, setDragCurrent] = useState(null);
@@ -72,7 +88,8 @@ export function useToolInteraction({ width, height, baseImageData, onCommitMask,
     const now = performance.now();
     if (now - lastPreviewAt.current < 150) return;
     lastPreviewAt.current = now;
-    const mask = surfaceAwareBrushStroke(baseImageData, width, height, nextPoints, brushSize, surfaceTolerance, rgbToLab);
+    let mask = surfaceAwareBrushStroke(baseImageData, width, height, nextPoints, brushSize, surfaceTolerance, rgbToLab);
+    if (constraintAlpha) mask = clipMaskToConstraint(mask, constraintAlpha);
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -97,16 +114,24 @@ export function useToolInteraction({ width, height, baseImageData, onCommitMask,
         setIsDrawing(true);
         brushPointsRef.current = [pt];
         setBrushPoints([pt]);
-        setSubtractStroke(!!evt?.altKey);
+        setSubtractStroke(maskRefineMode === 'remove' ? !evt?.altKey : !!evt?.altKey);
         lastPreviewAt.current = 0;
         armWindowUp();
         break;
+      case 'surface-pick': {
+        const surface = pickSurfaceAtPoint(surfaceMasks, pt.x, pt.y);
+        if (surface) onSurfacePick?.(surface);
+        break;
+      }
       case 'magic-wand': {
         if (!baseImageData) return;
         const x = Math.min(width - 1, Math.max(0, Math.round(pt.x)));
         const y = Math.min(height - 1, Math.max(0, Math.round(pt.y)));
-        const mask = floodFillMask(baseImageData, x, y, magicWandTolerance, rgbToLab);
-        onCommitMask(mask, 'magic-wand', {});
+        const mask = floodFillMask(baseImageData, x, y, magicWandTolerance, rgbToLab, { houseAlpha });
+        // clickX/clickY let handleCommitMask independently validate the click
+        // itself landed on the house (Section 12) — not just that some mask
+        // came back non-empty. tolerance is passed through purely for logging.
+        onCommitMask(mask, 'magic-wand', { clickX: x, clickY: y, tolerance: magicWandTolerance });
         break;
       }
       case 'eyedropper':
@@ -138,15 +163,27 @@ export function useToolInteraction({ width, height, baseImageData, onCommitMask,
       onCommitMask(mask, 'lasso', {});
       reset();
     } else if (activeTool === 'eraser' && brushPointsRef.current.length > 0) {
-      const strokeMask = rasterizeBrushStroke(width, height, brushPointsRef.current, brushSize);
+      // feather: 0 — a feathered stroke never reaches full (255) alpha right
+      // at its own edge, so subtracting it can never zero out a layer's mask
+      // no matter how thoroughly the user drags over it: the emptiness check
+      // downstream (isMaskEmpty) would keep finding a faint residual rim
+      // forever, and the layer would never auto-delete even when the erase
+      // is visually complete. A full-strength stroke has no such floor —
+      // subtracting 255 from any existing alpha always reaches exactly 0
+      // wherever it's dragged, regardless of how soft the *painted* mask's
+      // own edges are (surfaceAwareBrushStroke already uses the same
+      // feather: 0 footprint for an unrelated reason; same parameter, this
+      // is just a second real use for it).
+      const strokeMask = rasterizeBrushStroke(width, height, brushPointsRef.current, brushSize, { feather: 0 });
       onCommitMask(strokeMask, 'eraser', {});
       reset();
     } else if (activeTool === 'brush' && brushPointsRef.current.length > 0) {
       // The surface-aware brush clips the footprint to the wall under the
       // stroke; toggling it off restores the raw footprint for fine work.
-      const strokeMask = surfaceAware && baseImageData
+      let strokeMask = surfaceAware && baseImageData
         ? surfaceAwareBrushStroke(baseImageData, width, height, brushPointsRef.current, brushSize, surfaceTolerance, rgbToLab)
         : rasterizeBrushStroke(width, height, brushPointsRef.current, brushSize);
+      if (constraintAlpha) strokeMask = clipMaskToConstraint(strokeMask, constraintAlpha);
       onCommitMask(strokeMask, 'brush', { brushMode, subtract: subtractStroke });
       reset();
     } else {

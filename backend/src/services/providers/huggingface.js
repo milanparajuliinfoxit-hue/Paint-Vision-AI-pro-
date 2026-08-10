@@ -1,4 +1,4 @@
-const { post, ProviderError } = require('./httpClient');
+const { post, getWithLimits, ProviderError } = require('./httpClient');
 
 /**
  * Hugging Face Inference Providers provider.
@@ -92,15 +92,17 @@ function looksLikeImage(buffer) {
   return IMAGE_MAGIC.some(({ bytes }) => bytes.every((b, i) => buffer[i] === b));
 }
 
+// The URL here comes from the provider's own JSON response, not from our
+// code — a misbehaving or compromised endpoint could point it anywhere and
+// have us attach the HF key as a Bearer token to that host (SSRF + key
+// leak), with no bound on how long we'd wait or how much we'd download.
+// getWithLimits enforces both a timeout and a hard size cap.
 async function fetchRemoteImage(url, model) {
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${process.env.HF_API_KEY}` } });
-  if (!response.ok) {
-    throw new ProviderError(`Failed to download generated image from ${url} (HTTP ${response.status})`, {
-      provider: 'huggingface',
-      model,
-    });
-  }
-  return Buffer.from(await response.arrayBuffer());
+  return getWithLimits(url, {
+    headers: { Authorization: `Bearer ${process.env.HF_API_KEY}` },
+    provider: 'huggingface',
+    model,
+  });
 }
 
 async function parseImageResponse(response, model) {

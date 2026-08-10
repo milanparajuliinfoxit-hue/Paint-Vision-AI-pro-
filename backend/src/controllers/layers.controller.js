@@ -10,7 +10,7 @@ async function createLayer(req, res, next) {
     const asset = await assetsModel.getAsset(req.params.assetId);
     if (!asset) return res.status(404).json({ error: 'Asset not found' });
 
-    const { name, createdVia, currentColorId, opacity, orderIndex } = req.body;
+    const { name, createdVia, currentColorId, opacity, orderIndex, aiSurfaceKey, aiAnalysisId, aiSchemeId } = req.body;
     if (!name || !createdVia) {
       return res.status(400).json({ error: 'name and createdVia are required' });
     }
@@ -24,7 +24,28 @@ async function createLayer(req, res, next) {
     let maskPath = null;
     if (req.file) {
       const relativeDir = path.join('uploads', asset.id, 'masks');
-      maskPath = storage.saveBuffer(relativeDir, `layer_${Date.now()}.png`, req.file.buffer);
+      maskPath = await storage.saveBuffer(relativeDir, `layer_${Date.now()}.png`, req.file.buffer);
+    }
+
+    // AI-surface applies are idempotent: keyed on (ai_analysis_id,
+    // ai_surface_key), a re-apply updates the existing layer in place (201 on
+    // a fresh row, 200 on an update). aiAnalysisId is required for the
+    // idempotency key to work, so a surface apply without one falls back to
+    // the plain insert path.
+    if (createdVia === 'ai-surface' && aiSurfaceKey && aiAnalysisId) {
+      const { layer, created } = await layersModel.upsertAiLayer({
+        assetId: asset.id,
+        name,
+        maskPath,
+        currentColorId: currentColorId || null,
+        opacity: opacity !== undefined ? Number(opacity) : undefined,
+        orderIndex: orderIndex !== undefined ? Number(orderIndex) : undefined,
+        aiSurfaceKey,
+        aiAnalysisId: Number(aiAnalysisId),
+        aiSchemeId: aiSchemeId ? Number(aiSchemeId) : null,
+      });
+      if (!layer) return res.status(500).json({ error: 'Layer upsert failed' });
+      return res.status(created ? 201 : 200).json({ ...layer, _created: created });
     }
 
     const layer = await layersModel.createLayer({
@@ -35,6 +56,7 @@ async function createLayer(req, res, next) {
       currentColorId: currentColorId || null,
       opacity: opacity !== undefined ? Number(opacity) : undefined,
       orderIndex: orderIndex !== undefined ? Number(orderIndex) : undefined,
+      aiSurfaceKey: aiSurfaceKey || null,
     });
     res.status(201).json(layer);
   } catch (err) { next(err); }
@@ -64,7 +86,7 @@ async function updateLayer(req, res, next) {
     // only need coercion on the multipart path.
     if (req.file) {
       const relativeDir = path.join('uploads', existing.asset_id, 'masks');
-      patch.maskPath = storage.saveBuffer(relativeDir, `layer_${Date.now()}.png`, req.file.buffer);
+      patch.maskPath = await storage.saveBuffer(relativeDir, `layer_${Date.now()}.png`, req.file.buffer);
       for (const field of NUMERIC_PATCH_FIELDS) {
         if (patch[field] !== undefined) patch[field] = Number(patch[field]);
       }
