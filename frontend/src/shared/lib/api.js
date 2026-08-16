@@ -172,6 +172,36 @@ export const ai = {
       method: 'POST',
       body: JSON.stringify({ x, y, positivePoints, negativePoints, mode, tolerance }),
     }, LONG_TIMEOUT_MS),
+  // Gemini paint recolor — task_type 'visualize_paint' (default) or
+  // 'change_color' (explicit parentRevisionId). Returns immediately (202,
+  // status 'pending' or an existing 'ready' result reused) — the backend
+  // runs generation in the background; getVisualization is the polled
+  // read, generic across every task type (see below).
+  // userIntent is the dealer's optional free-text "what do you want to do"
+  // description (governing brief Section 4/10) — advisory only, the
+  // backend sanitizes/bounds it and never lets it override catalog colors.
+  requestVisualization: (assetId, { surfaceColorPlan, schemeId, userIntent, taskType, parentRevisionId }) =>
+    request(`/api/assets/${assetId}/ai/visualize`, {
+      method: 'POST',
+      body: JSON.stringify({ surfaceColorPlan, schemeId, userIntent, taskType, parentRevisionId }),
+    }, LONG_TIMEOUT_MS),
+  // Unified revision read/list — every task type (prepare_house,
+  // remove_objects, visualize_paint, change_color) is a row here.
+  getVisualization: (assetId, visualizationId) =>
+    request(`/api/assets/${assetId}/ai/visualizations/${visualizationId}`),
+  listVisualizations: (assetId) => request(`/api/assets/${assetId}/ai/visualizations`),
+  // Gemini house preparation (task_type 'prepare_house') — fixed,
+  // comprehensive cleanup. Separate from assets.clean() (ClipDrop/HF
+  // mask-guided removal above), which is untouched.
+  requestIsolation: (assetId) =>
+    request(`/api/assets/${assetId}/ai/isolate`, { method: 'POST' }, LONG_TIMEOUT_MS),
+  // Targeted object removal (task_type 'remove_objects') — dealer names
+  // exactly what to remove.
+  requestObjectRemoval: (assetId, { userIntent }) =>
+    request(`/api/assets/${assetId}/ai/remove-objects`, {
+      method: 'POST',
+      body: JSON.stringify({ userIntent }),
+    }, LONG_TIMEOUT_MS),
 };
 
 // --- History (append-only undo/redo log, persisted per project) ---

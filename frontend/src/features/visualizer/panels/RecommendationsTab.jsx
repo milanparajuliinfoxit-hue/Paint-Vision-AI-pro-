@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Wand2, BookmarkPlus, Check } from 'lucide-react';
+import { Wand2, BookmarkPlus, Check, Sparkles } from 'lucide-react';
 import { useAssetAnalysis } from '../hooks/useAiAnalysis';
 import { useGenerateRecommendations, useRecommendations } from '../hooks/useRecommendations';
 import { useApplySurface } from '../hooks/useApplySurface';
 import { useSaveConcept } from '../hooks/useConcepts';
 import { useAiMeta } from '../hooks/useAiAnalysis';
+import { useGenerateVisualization, useVisualizationStatus, useVisualizationsList } from '../hooks/useVisualization';
 import { renderSchemePreview, downscaleImageData, canvasToThumbnailBlob } from '../lib/renderSchemePreview';
 import { MAX_PREVIEW_DIM, buildPreviewCacheKey, createBoundedCache } from '../lib/schemePreviewCore';
 import { useToast } from '../../../shared/ui/toast';
 import { Button } from '../../../shared/ui/button';
+import { assets as assetsApi } from '../../../shared/lib/api';
 
 const ROLE_LABELS = {
   'primary-wall': 'Primary wall',
@@ -49,6 +51,26 @@ export default function RecommendationsTab({ projectId, assetId, width, height, 
   const generate = useGenerateRecommendations(assetId);
   const { applyScheme } = useApplySurface(projectId, assetId, { width, height });
   const saveConcept = useSaveConcept(projectId);
+
+  // Gemini photorealistic preview — separate from the deterministic LAB
+  // preview above. NOT the same thing: the composite preview is instant and
+  // always available; the Gemini preview is an optional, billed, async call
+  // the dealer opts into per scheme (Section 22 — separate concerns:
+  // house understanding / color scheme / image generation).
+  const visualizationEnabled = aiMeta?.ai?.visualization?.enabled;
+  const visualizationProvider = aiMeta?.ai?.visualization?.provider;
+  const { data: visualizations = [] } = useVisualizationsList(assetId);
+  const generateViz = useGenerateVisualization(assetId);
+  const [pendingVizIds, setPendingVizIds] = useState({});
+
+  // Most recent visualization per scheme (list is newest-first already).
+  const vizByScheme = useMemo(() => {
+    const map = new Map();
+    for (const v of visualizations) {
+      if (v.scheme_id != null && !map.has(v.scheme_id)) map.set(v.scheme_id, v);
+    }
+    return map;
+  }, [visualizations]);
 
   // class_key -> detected surface, so applying a scheme never references a
   // surface the analysis didn't actually find.
@@ -159,6 +181,32 @@ export default function RecommendationsTab({ projectId, assetId, width, height, 
     }
   }
 
+  // Kicks off (or, if an identical plan was already generated, reuses) a
+  // Gemini recolor of the real photo — every color comes from the scheme's
+  // own catalog paint ids, never freehand text (governing brief Section 7).
+  //
+  // Gemini-first migration: surfaceKey is the surface's semantic `role`
+  // (primary-wall/accent-wall/trim/roof/gutter/doors), not its detected
+  // `surfaceClass` (front-wall, window-frame-2, ...) — visualization.service.js
+  // now validates against the fixed architecturalCategories vocabulary
+  // (which deliberately reuses these same role names), not detected_surfaces,
+  // so a raw class_key would be rejected as an unknown category.
+  async function generateVisualization(scheme) {
+    const surfaceColorPlan = (scheme.surfaces || [])
+      .filter((s) => s.paintId && s.role && surfacesByClass.get(s.surfaceClass)?.paintable !== false)
+      .map((s) => ({ surfaceKey: s.role, paintId: s.paintId }));
+    if (surfaceColorPlan.length === 0) {
+      showToast('No paintable surfaces with catalog colors to visualize.', { variant: 'danger' });
+      return;
+    }
+    try {
+      const viz = await generateViz.mutateAsync({ surfaceColorPlan, schemeId: scheme.id });
+      setPendingVizIds((prev) => ({ ...prev, [scheme.id]: viz.id }));
+    } catch (err) {
+      showToast(err.message || 'Could not start the photorealistic preview.', { variant: 'danger' });
+    }
+  }
+
   // Persists the rendered look: the preview canvas downscaled to a thumbnail
   // plus surfaceClass -> paintId, so it re-applies as real layers later.
   async function saveAsConcept(scheme) {
@@ -266,9 +314,77 @@ export default function RecommendationsTab({ projectId, assetId, width, height, 
               <Wand2 size={11} />
               Catalog-only — every color is a real product in the paint catalog.
             </p>
+
+            {visualizationEnabled && visualizationProvider && (
+              <div className="mt-2 border-t border-[var(--line)] pt-2">
+                <SchemeVisualization
+                  assetId={assetId}
+                  visualizationId={pendingVizIds[scheme.id] || vizByScheme.get(scheme.id)?.id}
+                  onGenerate={() => generateVisualization(scheme)}
+                  generating={generateViz.isPending}
+                />
+              </div>
+            )}
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// One scheme's Gemini photorealistic preview. A separate component (not
+// inlined in the .map() above) because it needs its own poll hook instance
+// per scheme — useVisualizationStatus is disabled (no polling) until a
+// visualizationId exists, so schemes with no generation started yet cost
+// nothing.
+function SchemeVisualization({ assetId, visualizationId, onGenerate, generating }) {
+  const { data: visualization } = useVisualizationStatus(assetId, visualizationId);
+  const status = visualization?.status;
+
+  if (!visualizationId) {
+    return (
+      <Button size="sm" variant="ghost" onClick={onGenerate} disabled={generating} className="w-full justify-center">
+        <Sparkles size={13} className="mr-1" />
+        {generating ? 'Starting…' : 'Generate photorealistic preview'}
+      </Button>
+    );
+  }
+
+  if (status === 'pending' || !status) {
+    return (
+      <div className="flex items-center gap-2 text-[11px] text-[var(--graphite)]">
+        <Sparkles size={13} className="animate-pulse" />
+        Generating photorealistic preview… this can take up to a minute.
+      </div>
+    );
+  }
+
+  if (status === 'failed') {
+    const reason = visualization?.validationJson?.failureReason;
+    return (
+      <div className="flex flex-col gap-1">
+        <p className="text-[11px] text-[var(--danger)]">
+          Photorealistic preview failed{reason ? `: ${reason}` : '.'}
+        </p>
+        <Button size="sm" variant="ghost" onClick={onGenerate} className="w-full justify-center">
+          Try again
+        </Button>
+      </div>
+    );
+  }
+
+  // status === 'ready'
+  return (
+    <div className="flex flex-col gap-1.5">
+      <img
+        src={assetsApi.fileUrl(visualization.result_path)}
+        alt="Gemini photorealistic preview"
+        className="w-full rounded-[var(--radius-sm)] border border-[var(--line)] object-cover"
+      />
+      <p className="flex items-center gap-1 text-[10px] text-[var(--graphite)]">
+        <Sparkles size={11} />
+        AI-generated photorealistic preview — use "Apply" above for the editable, re-colorable version.
+      </p>
     </div>
   );
 }

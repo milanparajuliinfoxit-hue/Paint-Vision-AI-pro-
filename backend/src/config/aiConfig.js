@@ -33,14 +33,27 @@ function csvEnv(name) {
 // removed; see .env), and defaulting to a heuristic here would be exactly
 // the silent mock-as-AI substitution this app's own rules forbid. Leave
 // AI_ANALYSIS_PROVIDER unset until a real provider is registered.
+// Same "no default" rule applies to house-visualization: it's a new
+// capability with no prior production provider to fall back to, and it must
+// not be reachable until AI_VISUALIZATION_PROVIDER is explicitly set to a
+// live-validated provider (see GEMINI_RECOLORING_IMPLEMENTATION_PLAN.md
+// Phase 1 — gemini-image is registered but not live-tested as of writing).
+// 'house-isolation' (governing brief Priority 2 — extract/clean the target
+// house before understanding/recolor) follows the identical convention:
+// registered (gemini-image, hf-image both support it), no default provider
+// until AI_ISOLATION_PROVIDER is explicitly set.
 const CAPABILITY_PROVIDERS = {
   'house-understanding': process.env.AI_ANALYSIS_PROVIDER || null,
   'paint-recommendation': process.env.AI_RECOMMENDATION_PROVIDER || 'catalog',
+  'house-visualization': process.env.AI_VISUALIZATION_PROVIDER || null,
+  'house-isolation': process.env.AI_ISOLATION_PROVIDER || null,
 };
 
 const CAPABILITY_ENABLED = {
   'house-understanding': boolEnv('AI_ANALYSIS_ENABLED', true),
   'paint-recommendation': boolEnv('AI_RECOMMENDATION_ENABLED', true),
+  'house-visualization': boolEnv('AI_VISUALIZATION_ENABLED', true),
+  'house-isolation': boolEnv('AI_ISOLATION_ENABLED', true),
 };
 
 function isCapabilityEnabled(capability) {

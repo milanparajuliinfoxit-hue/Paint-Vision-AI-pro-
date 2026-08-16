@@ -57,6 +57,13 @@ const aiRunLimiter = rateLimit({
 app.use('/api/assets/:assetId/ai/analyze', aiRunLimiter);
 app.use('/api/assets/:assetId/ai/recommendations', aiRunLimiter);
 app.use('/api/assets/:assetId/ai/process', aiRunLimiter);
+// /ai/visualize calls a billed Gemini image-generation request per POST —
+// same billed-external-call reasoning as /clean and the limiter above.
+app.use('/api/assets/:assetId/ai/visualize', aiRunLimiter);
+// /ai/isolate and /ai/remove-objects are the same shape of billed Gemini
+// image-edit call.
+app.use('/api/assets/:assetId/ai/isolate', aiRunLimiter);
+app.use('/api/assets/:assetId/ai/remove-objects', aiRunLimiter);
 
 app.use('/api', requireAccessKey);
 

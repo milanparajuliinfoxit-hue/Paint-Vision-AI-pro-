@@ -1,17 +1,22 @@
 import { useState } from 'react';
+import AIWorkspaceTab from './AIWorkspaceTab';
 import AIAnalyzeTab from './AIAnalyzeTab';
 import LayersTab from './LayersTab';
 
 const SUB_TABS = [
-  { id: 'ai-understand', label: 'AI Understand' },
+  { id: 'ai-workspace', label: 'AI Workspace' },
+  { id: 'ai-details', label: 'AI Details' },
   { id: 'layers', label: 'Layers' },
 ];
 
-// Detected surfaces (AI Understand) and the editable layer list — both are
-// "what can I paint on this photo," just at different stages (detection vs.
-// the real layers a dealer is actively editing).
-export default function SurfacesTab({ projectId, assetId, width, height, colorLookup }) {
-  const [sub, setSub] = useState('ai-understand');
+// AI Workspace (Gemini-first: prepare/remove-objects/paint/change-color,
+// intent-driven, no segmentation required — see AIWorkspaceTab.jsx) is the
+// primary tab. AI Details is the old segmentation-first UI (detected
+// surfaces, protected objects, per-group Gemini generate) — kept available
+// as an optional/secondary diagnostic view, never a prerequisite for the
+// workspace above. Layers is the editable-layer list, unchanged.
+export default function SurfacesTab({ projectId, assetId, asset, width, height, colorLookup }) {
+  const [sub, setSub] = useState('ai-workspace');
 
   return (
     <div className="flex flex-col h-full">
@@ -34,7 +39,12 @@ export default function SurfacesTab({ projectId, assetId, width, height, colorLo
           scroll region of its own, so it gets an individual
           overflow-y-auto wrapper instead (same reasoning as ColorsTab). */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {sub === 'ai-understand' && (
+        {sub === 'ai-workspace' && (
+          <div className="h-full overflow-y-auto">
+            <AIWorkspaceTab projectId={projectId} assetId={assetId} asset={asset} width={width} height={height} />
+          </div>
+        )}
+        {sub === 'ai-details' && (
           <div className="h-full overflow-y-auto">
             <AIAnalyzeTab projectId={projectId} assetId={assetId} width={width} height={height} />
           </div>

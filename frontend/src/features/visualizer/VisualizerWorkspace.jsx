@@ -494,6 +494,7 @@ export default function VisualizerWorkspace({ onColorFocus }) {
     <Inspector
       projectId={projectId}
       assetId={activeAssetId}
+      asset={activeAsset}
       colorLookup={colorLookup}
       baseImageData={baseImageData}
       width={width}

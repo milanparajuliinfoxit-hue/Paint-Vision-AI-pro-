@@ -1,9 +1,10 @@
-import { BrainCircuit, ScanSearch } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { BrainCircuit, ScanSearch, Layers as LayersIcon } from 'lucide-react';
 import { useAiMeta, useAnalyzeAsset, useAssetAnalysis } from '../hooks/useAiAnalysis';
 import { useApplySurface } from '../hooks/useApplySurface';
 import { useToast } from '../../../shared/ui/toast';
 import { Button } from '../../../shared/ui/button';
-import { cn } from '../../../shared/lib/cn';
+import InlineColorPicker from '../components/InlineColorPicker';
 
 const ROLE_LABELS = {
   'primary-wall': 'Primary wall',
@@ -14,10 +15,47 @@ const ROLE_LABELS = {
   doors: 'Doors',
 };
 
-// AI house-understanding: analyze the photo, inspect every detected surface
-// (paintable vs protected), and promote any surface to a real layer with one
-// click. The AI only structures understanding — it never paints, and the
-// renderer only ever sees regular layers from the layers API.
+// A detected class_key like "windows-3" or "front-wall-2" is one instance;
+// dedupeKey in the backend's gemini-vision provider only ever appends a
+// numeric "-N" suffix to a repeated instance of the SAME class (see
+// geminiVisionProvider.js), never to two genuinely different classes
+// (front-wall/left-wall/right-wall are distinct keys already, not
+// suffix-derived) — so stripping a trailing "-<number>" is always safe and
+// groups only true repeats of one surface type together.
+function groupKeyOf(classKey) {
+  return classKey.replace(/-\d+$/, '');
+}
+
+function groupSurfaces(surfaces) {
+  const groups = new Map();
+  for (const s of surfaces || []) {
+    const key = groupKeyOf(s.class_key);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        groupKey: key,
+        displayName: (s.display_name || s.class_key).replace(/\s*\d+$/, ''),
+        paintable: s.paintable,
+        role: s.properties?.role || null,
+        members: [],
+      });
+    }
+    groups.get(key).members.push(s);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * "AI Details" — the pixel-segmentation diagnostic view (Gemini-first
+ * migration, governing brief Section 16/17): raw detected surfaces/objects,
+ * confidence, model version. This used to be the *only* way into AI
+ * painting; it no longer gates anything (AIWorkspaceTab is the primary
+ * workflow and needs zero segmentation to run). What's left here is
+ * genuinely useful on its own merits, not a demoted duplicate: precise
+ * per-instance masks for manual layer refinement ("this one balcony
+ * railing's mask is more accurate than a hand-drawn lasso would be") and
+ * visibility into what the AI actually detected, for dealers/support who
+ * want to see the diagnostics.
+ */
 export default function AIAnalyzeTab({ projectId, assetId, width, height }) {
   const showToast = useToast();
   const { data: aiMeta } = useAiMeta();
@@ -30,11 +68,17 @@ export default function AIAnalyzeTab({ projectId, assetId, width, height }) {
 
   const analyzed = analysis?.analyzed;
   const running = analyze.isPending || analysisRefetching;
-  // The job that actually produced the current results may have run under a
-  // different provider than what's configured right now — prefer it once it
-  // exists so the badge always reflects what generated what's on screen.
   const activeProvider = analysis?.job?.provider || provider;
   const isMockProvider = activeProvider === 'mock';
+  const analysisId = analysis?.job?.id ?? null;
+
+  const groups = useMemo(() => groupSurfaces(analysis?.surfaces), [analysis]);
+
+  // groupKey -> selected catalog paint. Reset whenever a fresh analysis
+  // lands (a re-analyze can change surfaces entirely, so a stale selection
+  // referencing a surface that no longer exists must not linger).
+  const [groupColors, setGroupColors] = useState({});
+  useEffect(() => { setGroupColors({}); }, [analysisId]);
 
   async function runAnalysis() {
     try {
@@ -45,17 +89,31 @@ export default function AIAnalyzeTab({ projectId, assetId, width, height }) {
     }
   }
 
-  async function addSurface(surface) {
+  function setGroupColor(groupKey, paint) {
+    setGroupColors((prev) => ({ ...prev, [groupKey]: paint }));
+  }
+
+  async function addGroupAsLayers(group) {
+    const paint = groupColors[group.groupKey];
+    if (!paint) {
+      showToast('Choose a color first.', { variant: 'danger' });
+      return;
+    }
     try {
-      const layer = await applySurface(surface, null);
-      if (layer) showToast(`Added layer "${layer.name}" — pick a paint to color it.`);
+      for (const member of group.members) await applySurface(member, paint);
+      showToast(`Added ${group.members.length} layer${group.members.length > 1 ? 's' : ''} for "${group.displayName}".`);
     } catch (err) {
-      showToast(err.message || 'Could not add surface.', { variant: 'danger' });
+      showToast(err.message || 'Could not add layers.', { variant: 'danger' });
     }
   }
 
   return (
     <div className="p-3 flex flex-col gap-3">
+      <p className="text-[11px] leading-snug text-[var(--graphite)]">
+        Diagnostic view — shows exactly what the AI detected in this photo. Not required for AI
+        Visualization (see the AI Workspace tab), useful for precise manual layer placement.
+      </p>
+
       {analysisEnabled === false && (
         <p className="text-xs text-[var(--warning)] leading-snug">
           AI analysis is disabled on this deployment (AI_ANALYSIS_ENABLED=false).
@@ -88,22 +146,11 @@ export default function AIAnalyzeTab({ projectId, assetId, width, height }) {
         )}
       </Button>
 
-      {!analyzed && !running && (
-        <p className="text-xs text-[var(--graphite)] leading-snug">
-          The AI detects the house, its paintable surfaces (walls, roof, trim, gutters…) and
-          protected objects (windows, trees, cars) — nothing is painted automatically.
-        </p>
-      )}
-
-      {running && !analyzed && isMockProvider && <p className="text-xs text-[var(--graphite)]">This runs locally in the mock provider (no API key).</p>}
-
       {analyzed && analysis.job && (
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[var(--graphite)] border-b border-[var(--line)] pb-2">
           <span>Model <span className="text-[var(--ink)]">{analysis.job.model_version}</span></span>
           <span>Confidence <span className="text-[var(--ink)]">{Math.round((analysis.job.confidence || 0) * 100)}%</span></span>
-          {analysis.job.processing_time_ms != null && (
-            <span>{analysis.job.processing_time_ms} ms</span>
-          )}
+          {analysis.job.processing_time_ms != null && <span>{analysis.job.processing_time_ms} ms</span>}
         </div>
       )}
 
@@ -113,37 +160,30 @@ export default function AIAnalyzeTab({ projectId, assetId, width, height }) {
         </p>
       )}
 
-      {analyzed && (analysis.surfaces || []).length > 0 && (
+      {analyzed && groups.length > 0 && (
         <section>
           <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase text-[var(--graphite)]">
             <BrainCircuit size={13} /> Detected surfaces
           </h3>
           <ul className="flex flex-col gap-1.5">
-            {(analysis.surfaces || []).map((s) => {
-              const role = s.properties?.role ? ROLE_LABELS[s.properties.role] || s.properties.role : null;
-              const paintable = s.paintable;
-              const lowQuality = s.properties?.quality?.tier === 'low';
+            {groups.map((group) => {
+              const role = group.role ? ROLE_LABELS[group.role] || group.role : null;
               return (
-                <li key={s.id} className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5">
+                <li key={group.groupKey} className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5">
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-xs font-medium text-[var(--ink)]">{s.display_name}</div>
-                    <div className="flex items-center gap-1.5 text-[11px] text-[var(--graphite)]">
-                      {role && <span>{role}</span>}
-                      {s.confidence != null && <span>· {Math.round(s.confidence * 100)}%</span>}
-                      {lowQuality && (
-                        <span
-                          title="This mask didn't pass our quality checks (odd shape, size, or overlap with a detected object) — it's still here to use manually, but automatic color schemes skip it."
-                          className="rounded-full bg-[var(--warning)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--warning)]"
-                        >
-                          Needs review
-                        </span>
-                      )}
+                    <div className="truncate text-xs font-medium text-[var(--ink)]">
+                      {group.displayName}
+                      {group.members.length > 1 && <span className="ml-1 text-[10px] text-[var(--graphite)]">×{group.members.length}</span>}
                     </div>
+                    {role && <div className="text-[11px] text-[var(--graphite)]">{role}</div>}
                   </div>
-                  {paintable ? (
-                    <Button size="sm" variant="secondary" onClick={() => addSurface(s)}>
-                      Add layer
-                    </Button>
+                  {group.paintable ? (
+                    <>
+                      <InlineColorPicker value={groupColors[group.groupKey]} onChange={(paint) => setGroupColor(group.groupKey, paint)} />
+                      <Button size="sm" variant="ghost" onClick={() => addGroupAsLayers(group)} title="Add as editable layer(s) now">
+                        <LayersIcon size={13} />
+                      </Button>
+                    </>
                   ) : (
                     <span className="rounded-[var(--radius-sm)] bg-[var(--danger)]/10 px-2 py-0.5 text-[10px] font-medium text-[var(--danger)]">
                       Not paintable
@@ -172,9 +212,12 @@ export default function AIAnalyzeTab({ projectId, assetId, width, height }) {
         </section>
       )}
 
-      {!running && <p className={cn('text-[11px] text-[var(--graphite)] leading-snug', analyzed && 'mt-auto')}>
-        Paint is never applied automatically — “Add layer” creates a real layer you can color from the catalog.
-      </p>}
+      {!analyzed && !running && (
+        <p className="text-xs text-[var(--graphite)] leading-snug">
+          The AI detects the house and its architectural surfaces (walls, trim, windows, doors,
+          balconies, railings, compound walls…) — nothing is painted automatically.
+        </p>
+      )}
     </div>
   );
 }

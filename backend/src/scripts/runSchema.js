@@ -34,6 +34,10 @@ async function main() {
     "ALTER TABLE layers ADD COLUMN ai_scheme_id INT NULL AFTER ai_analysis_id",
     "ALTER TABLE ai_jobs ADD COLUMN running_claim VARCHAR(30) GENERATED ALWAYS AS (CASE WHEN status = 'running' THEN job_type ELSE NULL END) STORED",
     "ALTER TABLE history_entries ADD COLUMN superseded_at TIMESTAMP(3) NULL",
+    "ALTER TABLE ai_visualizations ADD COLUMN user_intent VARCHAR(500) NULL AFTER surface_color_plan",
+    "ALTER TABLE ai_visualizations ADD COLUMN task_type ENUM('prepare_house','remove_objects','visualize_paint','change_color') NOT NULL DEFAULT 'visualize_paint' AFTER scheme_id",
+    "ALTER TABLE ai_visualizations ADD COLUMN parent_revision_id INT NULL AFTER task_type",
+    "ALTER TABLE ai_visualizations ADD COLUMN source_path VARCHAR(500) NULL AFTER parent_revision_id",
   ];
   for (const stmt of upgradeColumns) {
     try {
@@ -81,6 +85,19 @@ async function main() {
     }
   }
 
+  // Self-referencing FK for revision lineage (parent_revision_id) — added on
+  // an upgrade path separately from the column above since a DB created
+  // before this addendum has the column (from the loop above) but not yet
+  // this constraint. Re-running fails with ER_DUP_KEYNAME (constraint name
+  // already exists), same idempotency shape as the indexes above.
+  try {
+    await connection.query(
+      'ALTER TABLE ai_visualizations ADD CONSTRAINT fk_viz_parent FOREIGN KEY (parent_revision_id) REFERENCES ai_visualizations(id) ON DELETE SET NULL'
+    );
+  } catch (err) {
+    if (err.code !== 'ER_DUP_KEYNAME' && err.code !== 'ER_FK_DUP_NAME') throw err;
+  }
+
   // MODIFY is idempotent (re-running against a column already at this
   // precision is a no-op, not an error) — upgrades an earlier migrate run
   // that created updated_at at second resolution.
@@ -90,6 +107,14 @@ async function main() {
   for (const stmt of millisecondPrecision) {
     await connection.query(stmt);
   }
+
+  // MODIFY is idempotent the same way the updated_at precision upgrade
+  // above is — re-running against a DB that already has this enum value is
+  // a no-op, not an error. Needed for any DB created before
+  // 'house-visualization'/'house-isolation' were added to job_type.
+  await connection.query(
+    "ALTER TABLE ai_jobs MODIFY job_type ENUM('house-understanding','paint-recommendation','house-visualization','house-isolation') NOT NULL"
+  );
 
   console.log('Done.');
   await connection.end();

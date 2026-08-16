@@ -10,6 +10,9 @@ const aiRegistry = require('../services/ai/aiRegistry.service');
 const houseUnderstanding = require('../services/ai/houseUnderstanding.service');
 const paintRecommendation = require('../services/ai/paintRecommendation.service');
 const aiPipeline = require('../services/ai/aiPipeline.service');
+const visualization = require('../services/ai/visualization.service');
+const houseIsolation = require('../services/ai/houseIsolation.service');
+const architecturalCategories = require('../services/ai/architecturalCategories');
 
 const wallSegmentation = require('../services/ai/wallSegmentation.service');
 
@@ -116,8 +119,78 @@ async function getMeta(req, res, next) {
           modelVersion: aiRegistry.getProviderVersion('paint-recommendation'),
           count: aiConfig.getRecommendationCount(),
         },
+        visualization: {
+          enabled: aiConfig.isCapabilityEnabled('house-visualization'),
+          provider: aiConfig.getProviderFor('house-visualization'),
+          modelVersion: aiRegistry.getProviderVersion('house-visualization'),
+        },
+        isolation: {
+          enabled: aiConfig.isCapabilityEnabled('house-isolation'),
+          provider: aiConfig.getProviderFor('house-isolation'),
+          modelVersion: aiRegistry.getProviderVersion('house-isolation'),
+        },
       },
+      // Fixed semantic paint-target vocabulary (Gemini-first migration —
+      // color selection no longer depends on a prior segmentation run).
+      architecturalCategories: architecturalCategories.CATEGORIES,
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Handles visualize_paint (default) and change_color (explicit
+// parentRevisionId — "regenerate this specific result with an updated
+// color plan") task types; both are the same underlying operation, just
+// recorded distinctly in the revision timeline.
+async function requestVisualization(req, res, next) {
+  try {
+    const { surfaceColorPlan, schemeId, userIntent, taskType, parentRevisionId } = req.body || {};
+    const result = await visualization.requestVisualization(req.params.assetId, {
+      surfaceColorPlan, schemeId, userIntent, taskType, parentRevisionId,
+    });
+    res.status(202).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function requestIsolation(req, res, next) {
+  try {
+    const revision = await houseIsolation.requestIsolation(req.params.assetId);
+    res.status(202).json(revision);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function requestObjectRemoval(req, res, next) {
+  try {
+    const { userIntent } = req.body || {};
+    const revision = await houseIsolation.requestObjectRemoval(req.params.assetId, { userIntent });
+    res.status(202).json(revision);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getVisualization(req, res, next) {
+  try {
+    const result = await visualization.getVisualization(req.params.assetId, Number(req.params.visualizationId));
+    if (!result) return res.status(404).json({ error: 'Visualization not found' });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Doubles as the unified revision-history list — every task type
+// (prepare_house/remove_objects/visualize_paint/change_color) lives in the
+// same table, so this one endpoint backs the whole "Original -> Prepared ->
+// Painted" timeline the frontend renders, not a per-task endpoint each.
+async function listVisualizations(req, res, next) {
+  try {
+    res.json(await visualization.listVisualizations(req.params.assetId));
   } catch (err) {
     next(err);
   }
@@ -126,4 +199,6 @@ async function getMeta(req, res, next) {
 module.exports = {
   analyzeAsset, getAnalysis, generateRecommendations, listRecommendations, getMeta,
   processAsset, getPipelineStatus, segmentWall,
+  requestVisualization, getVisualization, listVisualizations,
+  requestIsolation, requestObjectRemoval,
 };

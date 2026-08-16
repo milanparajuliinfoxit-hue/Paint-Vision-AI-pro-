@@ -20,4 +20,19 @@ router.get('/status', ctrl.getPipelineStatus);
 // Promptable wall detection (Phase 3): point-click segmentation & refinement
 router.post('/segment-wall', ctrl.segmentWall);
 
+// Gemini recolor visualization — async job pattern (fire, then poll), same
+// shape as /process + /status. See GEMINI_RECOLORING_IMPLEMENTATION_PLAN.md.
+router.post('/visualize', ctrl.requestVisualization);
+router.get('/visualizations', ctrl.listVisualizations);
+router.get('/visualizations/:visualizationId', ctrl.getVisualization);
+
+// Gemini house preparation / targeted object removal — async, unified
+// revision model (governing brief §13/§31): both return an
+// ai_visualizations row, polled the same generic way as /visualize via
+// GET /visualizations/:visualizationId — no separate status endpoint per
+// task type. Separate from POST /clean (ClipDrop/HF mask-guided removal),
+// which is untouched.
+router.post('/isolate', ctrl.requestIsolation);
+router.post('/remove-objects', ctrl.requestObjectRemoval);
+
 module.exports = router;

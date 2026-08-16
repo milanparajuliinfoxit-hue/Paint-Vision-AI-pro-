@@ -213,5 +213,6 @@ function parseJson(v) {
 module.exports = {
   createJob, getJob, getRunningJob, markSuccess, markFailed, listJobsForAsset,
   createSurface, getSurface, createObject, getObject,
-  listSurfacesForJob, listObjectsForJob, getLatestAnalysis, listMaskPathsForAsset, deleteAnalysesForAsset,
+  listSurfacesForJob, listObjectsForJob, getLatestAnalysis,
+  listMaskPathsForAsset, deleteAnalysesForAsset,
 };

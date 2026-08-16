@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS export_jobs (
 CREATE TABLE IF NOT EXISTS ai_jobs (
     id                  INT AUTO_INCREMENT PRIMARY KEY,
     asset_id            VARCHAR(36) NOT NULL,
-    job_type            ENUM('house-understanding','paint-recommendation') NOT NULL,
+    job_type            ENUM('house-understanding','paint-recommendation','house-visualization','house-isolation') NOT NULL,
     provider            VARCHAR(50) NOT NULL,
     model_version       VARCHAR(100) NULL,
     status              ENUM('running','succeeded','failed') NOT NULL DEFAULT 'running',
@@ -270,4 +270,41 @@ CREATE TABLE IF NOT EXISTS paint_recommendations (
     CONSTRAINT fk_reco_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
     CONSTRAINT fk_reco_asset FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
     KEY idx_reco_asset (asset_id)
+) ENGINE=InnoDB;
+
+-- Generated Gemini recolor visualizations. `assets` has exactly one
+-- cleaned_path (singular); this is the "N generated visualizations per
+-- asset" table nothing in the pre-Gemini schema represented.
+-- surface_color_plan is a snapshot of exactly what was sent to the
+-- provider (surfaceKey -> paintId) — kept even if the referenced scheme
+-- later changes, so a generated image always stays traceable to the real
+-- catalog colors that produced it (governing brief Section 15).
+-- Doubles as the unified AI *revision* timeline (Gemini-first migration):
+-- every Gemini image operation on an asset — prepare-house, remove-objects,
+-- visualize-paint, change-color — writes one row here, chained via
+-- parent_revision_id, so "Original -> Prepared -> Painted -> re-colored" is
+-- a real traceable lineage, not four disconnected features. Reused rather
+-- than renamed/split into a second table (governing brief §31 "avoid
+-- redundant storage models") — the concept (one generated image + the
+-- inputs that produced it) was already exactly this table's shape; it only
+-- needed task_type/parent_revision_id/source_path to become general.
+CREATE TABLE IF NOT EXISTS ai_visualizations (
+    id                  INT AUTO_INCREMENT PRIMARY KEY,
+    asset_id            VARCHAR(36) NOT NULL,
+    job_id              INT NOT NULL,
+    scheme_id           INT NULL,
+    task_type           ENUM('prepare_house','remove_objects','visualize_paint','change_color') NOT NULL DEFAULT 'visualize_paint',
+    parent_revision_id  INT NULL,
+    source_path         VARCHAR(500) NULL,
+    surface_color_plan  JSON NOT NULL,
+    user_intent         VARCHAR(500) NULL,
+    result_path         VARCHAR(500) NOT NULL,
+    status              ENUM('pending','ready','failed') NOT NULL DEFAULT 'pending',
+    validation_json      JSON NULL,
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_viz_asset FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE CASCADE,
+    CONSTRAINT fk_viz_job FOREIGN KEY (job_id) REFERENCES ai_jobs(id) ON DELETE CASCADE,
+    CONSTRAINT fk_viz_scheme FOREIGN KEY (scheme_id) REFERENCES paint_recommendations(id) ON DELETE SET NULL,
+    CONSTRAINT fk_viz_parent FOREIGN KEY (parent_revision_id) REFERENCES ai_visualizations(id) ON DELETE SET NULL,
+    KEY idx_viz_asset (asset_id)
 ) ENGINE=InnoDB;

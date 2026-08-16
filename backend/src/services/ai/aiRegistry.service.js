@@ -40,8 +40,24 @@ const catalogRecommendationProvider = require('./providers/catalogRecommendation
 const hfSchemeProvider = require('./providers/hfSchemeProvider');
 const replicateVisionProvider = require('./providers/replicateVisionProvider');
 const falVisionProvider = require('./providers/falVisionProvider');
+const geminiVisionProvider = require('./providers/geminiVisionProvider');
+const geminiImageProvider = require('./providers/geminiImageProvider');
+const hfImageProvider = require('./providers/hfImageProvider');
 
-const PROVIDERS = [catalogRecommendationProvider, hfSchemeProvider, replicateVisionProvider, falVisionProvider];
+// geminiVisionProvider is real-API-verified (see
+// GEMINI_IMPLEMENTATION_FINAL_REPORT.md §8-9). geminiImageProvider is the
+// intended production house-visualization provider but is currently
+// blocked by a real, external, account-level Gemini quota=0 (§7 of that
+// report) — hfImageProvider ("hf-image") is a real, credentialed
+// development fallback for the same capability (reuses this repo's
+// already-working HF FLUX.2 edit config), explicitly not Gemini and
+// surfaced as such by the frontend, kept only to validate the rest of the
+// pipeline while the Gemini blocker is unresolved.
+const PROVIDERS = [
+  catalogRecommendationProvider, hfSchemeProvider,
+  replicateVisionProvider, falVisionProvider,
+  geminiVisionProvider, geminiImageProvider, hfImageProvider,
+];
 
 function getProviderFor(capability) {
   const configured = aiConfig.getProviderFor(capability);

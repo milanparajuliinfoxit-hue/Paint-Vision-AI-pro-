@@ -6,17 +6,21 @@ import AdjustmentsTab from './AdjustmentsTab';
 import { useVisualizerStore } from '../store/visualizerStore';
 
 const TABS = [
-  { id: 'ai-schemes', label: 'AI Schemes' },
+  { id: 'surfaces', label: 'AI Visualization' },
   { id: 'colors', label: 'Colors' },
-  { id: 'surfaces', label: 'Surfaces' },
+  { id: 'ai-schemes', label: 'Suggested Schemes' },
   { id: 'adjustments', label: 'Adjustments' },
 ];
 
-// Right panel: AI Schemes / Colors / Surfaces / Adjustments. AI Schemes is
-// the default tab — a dealer lands on the AI's recommendations first, not a
-// tool inspector, once there's something to look at.
-export default function Inspector({ projectId, assetId, width, height, baseImageData, colorLookup, onOpenExport }) {
-  const [active, setActive] = useState('ai-schemes');
+// Right panel: AI Visualization / Colors / Suggested Schemes / Adjustments.
+// AI Visualization (the dealer-controlled understand -> assign catalog
+// colors -> describe intent -> generate workflow, SurfacesTab/AIAnalyzeTab)
+// is the default and primary AI workflow per the governing brief (Section
+// 32/44: "Prefer AI Visualization over AI Schemes as the primary AI
+// workflow" — auto-generated schemes are secondary/optional, not what a
+// dealer should land on first).
+export default function Inspector({ projectId, assetId, asset, width, height, baseImageData, colorLookup, onOpenExport }) {
+  const [active, setActive] = useState('surfaces');
   const activeTool = useVisualizerStore((s) => s.activeTool);
 
   // Brush/eraser options (size, mode, "select a layer first") live in
@@ -65,7 +69,7 @@ export default function Inspector({ projectId, assetId, width, height, baseImage
           <ColorsTab projectId={projectId} assetId={assetId} baseImageData={baseImageData} width={width} height={height} />
         )}
         {active === 'surfaces' && (
-          <SurfacesTab projectId={projectId} assetId={assetId} width={width} height={height} colorLookup={colorLookup} />
+          <SurfacesTab projectId={projectId} assetId={assetId} asset={asset} width={width} height={height} colorLookup={colorLookup} />
         )}
         {active === 'adjustments' && (
           <div className="h-full overflow-y-auto">
