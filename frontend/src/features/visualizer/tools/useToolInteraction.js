@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useVisualizerStore } from '../store/visualizerStore';
-import { rasterizeRect, rasterizePolygon, rasterizeBrushStroke, surfaceAwareBrushStroke, floodFillMask, clipMaskToConstraint, pickSurfaceAtPoint } from './maskOps';
+import { rasterizeRect, rasterizePolygon, rasterizeBrushStroke, surfaceAwareBrushStroke, floodFillMask, floodFillMaskDebug, maskToPreviewDataUrl, clipMaskToConstraint, pickSurfaceAtPoint } from './maskOps';
 import { rgbToLab } from '../../../shared/lib/colorEngine';
 
 // Owns the transient, in-progress interaction for whichever tool is active
@@ -28,6 +28,9 @@ export function useToolInteraction({
   const brushMode = useVisualizerStore((s) => s.brushMode);
   const brushSize = useVisualizerStore((s) => s.brushSize);
   const magicWandTolerance = useVisualizerStore((s) => s.magicWandTolerance);
+  const magicWandFeather = useVisualizerStore((s) => s.magicWandFeather);
+  const magicWandDebugEnabled = useVisualizerStore((s) => s.magicWandDebugEnabled);
+  const setMagicWandDebug = useVisualizerStore((s) => s.setMagicWandDebug);
   const surfaceAware = useVisualizerStore((s) => s.surfaceAware);
   const surfaceTolerance = useVisualizerStore((s) => s.surfaceTolerance);
   const maskRefineMode = useVisualizerStore((s) => s.maskRefineMode);
@@ -127,7 +130,19 @@ export function useToolInteraction({
         if (!baseImageData) return;
         const x = Math.min(width - 1, Math.max(0, Math.round(pt.x)));
         const y = Math.min(height - 1, Math.max(0, Math.round(pt.y)));
-        const mask = floodFillMask(baseImageData, x, y, magicWandTolerance, rgbToLab, { houseAlpha });
+        const floodOpts = { houseAlpha, featherPx: magicWandFeather };
+        let mask;
+        if (magicWandDebugEnabled) {
+          const stages = floodFillMaskDebug(baseImageData, x, y, magicWandTolerance, rgbToLab, floodOpts);
+          mask = stages.mask;
+          setMagicWandDebug({
+            raw: maskToPreviewDataUrl(stages.raw),
+            closed: maskToPreviewDataUrl(stages.closed),
+            final: maskToPreviewDataUrl(stages.final),
+          });
+        } else {
+          mask = floodFillMask(baseImageData, x, y, magicWandTolerance, rgbToLab, floodOpts);
+        }
         // clickX/clickY let handleCommitMask independently validate the click
         // itself landed on the house (Section 12) — not just that some mask
         // came back non-empty. tolerance is passed through purely for logging.

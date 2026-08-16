@@ -14,7 +14,7 @@ if (typeof globalThis.ImageData === 'undefined') {
   };
 }
 
-const { isMaskEmpty, masksOverlap, mergeMasks, unionAlphaGrids, isPointInsideAlpha, canEnterFloodFillPixel, countMaskPixels } = await import('./maskOps.js');
+const { isMaskEmpty, masksOverlap, mergeMasks, unionAlphaGrids, isPointInsideAlpha, canEnterFloodFillPixel, countMaskPixels, closeSmallHoles, computeFloodFillGrids } = await import('./maskOps.js');
 
 // isMaskEmpty/masksOverlap only ever read `.data` (an RGBA byte array) —
 // plain objects shaped like that are enough here, no real ImageData/DOM
@@ -174,4 +174,85 @@ test('canEnterFloodFillPixel: absent house mask never blocks (color/step toleran
 test('countMaskPixels counts only pixels with nonzero alpha', () => {
   assert.equal(countMaskPixels(fakeMask([0, 255, 0, 128, 0])), 2);
   assert.equal(countMaskPixels(fakeMask([0, 0, 0])), 0);
+});
+
+// --- Magic Wand hole-closing (the fix for "patches of original paint
+// remaining") -----------------------------------------------------------
+// A minimal 1-channel LAB stand-in (color value lives entirely in `r`, with
+// `g`/`b` unused) keeps these tests deterministic without importing the real
+// sRGB->LAB math — closeSmallHoles/computeFloodFillGrids only ever call
+// rgbToLab and compare the numbers it returns, so any consistent metric
+// exercises the same logic paths as the real color space would.
+const fakeRgbToLab = (r) => ({ l: r, a: 0, b: 0 });
+
+function buildFlatImage(width, height, baseR) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    data[i * 4] = baseR;
+    data[i * 4 + 3] = 255;
+  }
+  return { width, height, data, setR: (x, y, r) => { data[(y * width + x) * 4] = r; } };
+}
+
+test('closeSmallHoles fills a single noise pixel fully surrounded by selection and color-plausible', () => {
+  const width = 5, height = 5;
+  // Every pixel selected except the center one.
+  const raw = new Uint8Array(width * height).fill(255);
+  raw[2 * width + 2] = 0;
+  const img = buildFlatImage(width, height, 200);
+  img.setR(2, 2, 185); // deviates 15 from the wall reference — within the loosened tolerance below
+  const refLab = fakeRgbToLab(200);
+  const closed = closeSmallHoles(raw, width, height, img.data, refLab, fakeRgbToLab, 10); // loosened = 10*1.6 = 16
+  assert.equal(closed[2 * width + 2], 255, 'isolated, color-plausible hole must be closed');
+});
+
+test('closeSmallHoles never fills a hole whose color is implausible even when fully surrounded', () => {
+  const width = 5, height = 5;
+  const raw = new Uint8Array(width * height).fill(255);
+  raw[2 * width + 2] = 0;
+  const img = buildFlatImage(width, height, 200);
+  img.setR(2, 2, 0); // wildly different — a screw, a crack, real detail, not noise
+  const refLab = fakeRgbToLab(200);
+  const closed = closeSmallHoles(raw, width, height, img.data, refLab, fakeRgbToLab, 10);
+  assert.equal(closed[2 * width + 2], 0, 'implausible-colored pixel must stay excluded regardless of surrounding selection');
+});
+
+test('closeSmallHoles never fills a large unselected region even where its border touches selection', () => {
+  const width = 9, height = 9;
+  const raw = new Uint8Array(width * height).fill(255);
+  // A solid 3x3 unselected block (stand-in for a window) — every one of its
+  // pixels borders mostly other unselected block pixels, not selection.
+  for (let y = 3; y <= 5; y++) for (let x = 3; x <= 5; x++) raw[y * width + x] = 0;
+  const img = buildFlatImage(width, height, 200);
+  const refLab = fakeRgbToLab(200);
+  const closed = closeSmallHoles(raw, width, height, img.data, refLab, fakeRgbToLab, 10);
+  for (let y = 3; y <= 5; y++) {
+    for (let x = 3; x <= 5; x++) {
+      assert.equal(closed[y * width + x], 0, `block pixel (${x},${y}) must not be bridged by hole-closing`);
+    }
+  }
+});
+
+test('computeFloodFillGrids: raw fill leaves a noise hole; closedGrid fills it but leaves a real feature (window) alone', () => {
+  const width = 9, height = 9;
+  const img = buildFlatImage(width, height, 200);
+  img.setR(4, 4, 185); // single noisy wall pixel, deviation 15
+  for (let y = 2; y <= 4; y++) for (let x = 6; x <= 8; x++) img.setR(x, y, 0); // "window" block, deviation 200
+
+  const { rawGrid, closedGrid } = computeFloodFillGrids(img, 0, 0, 10, fakeRgbToLab, {});
+
+  assert.equal(rawGrid[4 * width + 4], 0, 'the noisy pixel fails the strict connectivity fill and is a raw hole');
+  assert.equal(closedGrid[4 * width + 4], 255, 'hole-closing recovers the isolated, color-plausible noise pixel');
+
+  // The window block must never be selected in either stage.
+  for (let y = 2; y <= 4; y++) {
+    for (let x = 6; x <= 8; x++) {
+      assert.equal(rawGrid[y * width + x], 0, `window pixel (${x},${y}) must not be in the raw fill`);
+      assert.equal(closedGrid[y * width + x], 0, `window pixel (${x},${y}) must not be bridged into the closed selection`);
+    }
+  }
+
+  // The rest of the flat wall is fully selected in both stages.
+  assert.equal(rawGrid[0], 255);
+  assert.equal(closedGrid[0], 255);
 });

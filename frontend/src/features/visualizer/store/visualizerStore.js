@@ -11,6 +11,18 @@ export const useVisualizerStore = create((set, get) => ({
   maskRefineMode: 'add',
   brushSize: 60,
   magicWandTolerance: 24,
+  // Controlled anti-aliasing radius (px) for the Magic Wand's final mask
+  // edge — separate from `tolerance` (which is a color-similarity gate, not
+  // a blur amount) so a wider selection tolerance never has to also mean a
+  // softer/haloed edge.
+  magicWandFeather: 1.5,
+  // Debug mode (requirements doc, Section 17): when on, a Magic Wand click
+  // also captures the raw flood-fill result and the hole-closed result (see
+  // maskOps.floodFillMaskDebug) into `magicWandDebug` for inspection, so a
+  // selection problem and a compositing problem are never confused with
+  // each other. Off by default — pure inspection aid, not a rendering mode.
+  magicWandDebugEnabled: false,
+  magicWandDebug: null, // { raw, closed, final } data URLs | null
 
   // Surface-aware brush: clips the brush footprint to the architectural
   // surface under the stroke (stops at railings, frames, glass, sky/ground
@@ -76,6 +88,9 @@ export const useVisualizerStore = create((set, get) => ({
   setMaskRefineMode: (mode) => set({ maskRefineMode: mode }),
   setBrushSize: (size) => set({ brushSize: size }),
   setMagicWandTolerance: (tolerance) => set({ magicWandTolerance: tolerance }),
+  setMagicWandFeather: (feather) => set({ magicWandFeather: feather }),
+  setMagicWandDebugEnabled: (on) => set({ magicWandDebugEnabled: on, magicWandDebug: null }),
+  setMagicWandDebug: (debug) => set({ magicWandDebug: debug }),
   setSurfaceAware: (on) => set({ surfaceAware: on }),
   setSurfaceTolerance: (tolerance) => set({ surfaceTolerance: tolerance }),
   setAiSurfaceLock: (on) => set({ aiSurfaceLock: on }),

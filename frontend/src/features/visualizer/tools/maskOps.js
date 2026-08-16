@@ -433,17 +433,86 @@ export function countMaskPixels(mask) {
   return count;
 }
 
-// Flood-fill by LAB color distance from a clicked pixel — the "Magic Wand"
-// tool, pure client-side, no segmentation model (requirements doc, Section
-// 5.2 flags real AI surface segmentation as a separate, deferred feature).
-// Boundary-aware (see canEnterFloodFillPixel): gated by color distance from
-// the clicked pixel, the local step between adjacent pixels, and — when
-// `opts.houseAlpha` (a detected-house-region grid) is available — never
-// crosses outside it, however close the colors are on either side.
-export function floodFillMask(imageData, startX, startY, tolerance, rgbToLab, opts = {}) {
-  const { houseAlpha, houseAlphaThreshold = 32 } = opts;
-  const { width, height, data } = imageData;
+// Fills small isolated gaps left inside an otherwise-selected region — the
+// fix for the "patches of original paint remaining" defect. A strict
+// connectivity flood fill permanently rejects any pixel that fails the
+// tolerance test the moment it's first reached, so ordinary photo noise
+// (JPEG block artifacts, texture grain, a fleck of dust, a faint stain)
+// scattered across a real wall leaves a scatter of unselected single-pixel
+// holes. This is not the same problem as "tolerance is too low": those
+// pixels are surrounded on (almost) every side by pixels the fill *did*
+// accept, so simply raising tolerance to catch them would also catch
+// genuinely different surfaces elsewhere in the image.
+//
+// A pixel is only re-admitted if BOTH hold:
+//   1. Neighbor-majority: at least `minNeighbors` of its 8 neighbors are
+//      already selected — true for an isolated speck inside a selection,
+//      false for a real unselected region (a window is a large contiguous
+//      blob; the vast majority of its own border pixels border *other
+//      window pixels*, not selected wall pixels) so this cannot bridge into
+//      an architectural feature no matter how many iterations run.
+//   2. Color plausibility: still within a loosened multiple of the seed
+//      tolerance — a truly odd pixel (a screw head, a small crack) stays
+//      excluded even when fully surrounded by selection.
+function fillHolesPass(grid, width, height, data, refLab, rgbToLab, toleranceLoose, minNeighbors) {
+  const out = Uint8Array.from(grid);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (grid[idx] !== 0) continue; // only ever fills gaps, never shrinks the selection
+      let selected = 0;
+      let total = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+          total++;
+          if (grid[ny * width + nx] !== 0) selected++;
+        }
+      }
+      if (total === 0 || selected < minNeighbors) continue;
+      const i = idx * 4;
+      const lab = rgbToLab(data[i], data[i + 1], data[i + 2]);
+      const dist = Math.sqrt((lab.l - refLab.l) ** 2 + (lab.a - refLab.a) ** 2 + (lab.b - refLab.b) ** 2);
+      if (dist <= toleranceLoose) out[idx] = 255;
+    }
+  }
+  return out;
+}
+
+// Runs fillHolesPass a few times so a 2-3px noise cluster (not just single
+// pixels) closes too, without ever touching a pixel that isn't tightly
+// surrounded by real selection.
+export function closeSmallHoles(rawGrid, width, height, data, refLab, rgbToLab, tolerance, opts = {}) {
+  const { iterations = 3, minNeighbors = 6, toleranceMultiplier = 1.6 } = opts;
+  let grid = rawGrid;
+  const toleranceLoose = tolerance * toleranceMultiplier;
+  for (let it = 0; it < iterations; it++) {
+    grid = fillHolesPass(grid, width, height, data, refLab, rgbToLab, toleranceLoose, minNeighbors);
+  }
+  return grid;
+}
+
+function gridToImageData(grid, width, height) {
   const mask = new ImageData(width, height);
+  for (let i = 0; i < grid.length; i++) mask.data[i * 4 + 3] = grid[i];
+  return mask;
+}
+
+// The connectivity-respecting BFS core of the Magic Wand, factored out so it
+// can be exercised directly by tests (pure Uint8Array grids, no Canvas/DOM)
+// and shared between floodFillMask and floodFillMaskDebug. Boundary-aware
+// (see canEnterFloodFillPixel): gated by color distance from the clicked
+// pixel, the local step between adjacent pixels, and — when `opts.houseAlpha`
+// (a detected-house-region grid) is available — never crosses outside it,
+// however close the colors are on either side. Returns both the raw
+// fill result and the hole-closed result so callers/tests can inspect either
+// stage.
+export function computeFloodFillGrids(imageData, startX, startY, tolerance, rgbToLab, opts = {}) {
+  const { houseAlpha, houseAlphaThreshold = 32, closeHoles = true } = opts;
+  const { width, height, data } = imageData;
+  const rawGrid = new Uint8Array(width * height);
   const visited = new Uint8Array(width * height);
   // A real edge shows a bigger jump between two adjacent pixels than the
   // gradual shading inside one surface does — capped well below the overall
@@ -459,8 +528,7 @@ export function floodFillMask(imageData, startX, startY, tolerance, rgbToLab, op
 
   while (stack.length) {
     const [x, y, fromLab] = stack.pop();
-    const i = (y * width + x) * 4;
-    mask.data[i + 3] = 255;
+    rawGrid[y * width + x] = 255;
 
     const neighbors = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]];
     for (const [nx, ny] of neighbors) {
@@ -483,7 +551,60 @@ export function floodFillMask(imageData, startX, startY, tolerance, rgbToLab, op
       stack.push([nx, ny, neighborLab]);
     }
   }
-  return featherMask(mask, 1.5);
+
+  let closedGrid = rawGrid;
+  if (closeHoles) {
+    closedGrid = closeSmallHoles(rawGrid, width, height, data, startLab, rgbToLab, tolerance);
+    // Hole-closing must never let paint escape a detected house region, even
+    // though it already can't bridge into a real architectural feature on
+    // its own (see fillHolesPass) — this is a cheap, redundant belt-and-
+    // braces clip against the same outer boundary the fill itself respects.
+    if (houseAlpha) {
+      for (let i = 0; i < closedGrid.length; i++) {
+        if (houseAlpha[i] < houseAlphaThreshold && closedGrid[i] !== rawGrid[i]) closedGrid[i] = rawGrid[i];
+      }
+    }
+  }
+
+  return { width, height, rawGrid, closedGrid };
+}
+
+// Flood-fill by LAB color distance from a clicked pixel — the "Magic Wand"
+// tool, pure client-side, no segmentation model (requirements doc, Section
+// 5.2 flags real AI surface segmentation as a separate, deferred feature).
+export function floodFillMask(imageData, startX, startY, tolerance, rgbToLab, opts = {}) {
+  const { closedGrid, width, height } = computeFloodFillGrids(imageData, startX, startY, tolerance, rgbToLab, opts);
+  const mask = gridToImageData(closedGrid, width, height);
+  return featherMask(mask, opts.featherPx ?? 1.5);
+}
+
+// Debug variant (Magic Wand debug mode — AdjustmentsTab): returns every
+// stage of the pipeline as its own alpha-only ImageData so a caller can
+// render "raw selection" vs "after hole-closing" vs "final feathered mask"
+// side by side, instead of only ever seeing the end result.
+export function floodFillMaskDebug(imageData, startX, startY, tolerance, rgbToLab, opts = {}) {
+  const { rawGrid, closedGrid, width, height } = computeFloodFillGrids(imageData, startX, startY, tolerance, rgbToLab, opts);
+  const raw = gridToImageData(rawGrid, width, height);
+  const closed = gridToImageData(closedGrid, width, height);
+  const final = featherMask(gridToImageData(closedGrid, width, height), opts.featherPx ?? 1.5);
+  return { mask: final, raw, closed, final };
+}
+
+// Renders an alpha-only mask ImageData as a visible black/white PNG data URL
+// (alpha value -> grayscale RGB, full opacity) so it can be shown directly
+// in an <img> — used only by the Magic Wand debug panel.
+export function maskToPreviewDataUrl(mask) {
+  const canvas = document.createElement('canvas');
+  canvas.width = mask.width;
+  canvas.height = mask.height;
+  const ctx = canvas.getContext('2d');
+  const vis = ctx.createImageData(mask.width, mask.height);
+  for (let i = 0; i < mask.data.length; i += 4) {
+    const v = mask.data[i + 3];
+    vis.data[i] = v; vis.data[i + 1] = v; vis.data[i + 2] = v; vis.data[i + 3] = 255;
+  }
+  ctx.putImageData(vis, 0, 0);
+  return canvas.toDataURL('image/png');
 }
 
 export function imageDataToPngBlob(imageData) {

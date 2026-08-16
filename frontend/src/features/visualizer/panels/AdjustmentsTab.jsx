@@ -18,6 +18,11 @@ export default function AdjustmentsTab({ projectId, assetId }) {
   const setBrushSize = useVisualizerStore((s) => s.setBrushSize);
   const magicWandTolerance = useVisualizerStore((s) => s.magicWandTolerance);
   const setMagicWandTolerance = useVisualizerStore((s) => s.setMagicWandTolerance);
+  const magicWandFeather = useVisualizerStore((s) => s.magicWandFeather);
+  const setMagicWandFeather = useVisualizerStore((s) => s.setMagicWandFeather);
+  const magicWandDebugEnabled = useVisualizerStore((s) => s.magicWandDebugEnabled);
+  const setMagicWandDebugEnabled = useVisualizerStore((s) => s.setMagicWandDebugEnabled);
+  const magicWandDebug = useVisualizerStore((s) => s.magicWandDebug);
   const surfaceAware = useVisualizerStore((s) => s.surfaceAware);
   const setSurfaceAware = useVisualizerStore((s) => s.setSurfaceAware);
   const surfaceTolerance = useVisualizerStore((s) => s.surfaceTolerance);
@@ -145,6 +150,49 @@ export default function AdjustmentsTab({ projectId, assetId }) {
           <h3 className="text-xs uppercase text-[var(--graphite)] mb-2">Magic Wand</h3>
           <label className="text-xs text-[var(--graphite)]">Tolerance — {magicWandTolerance}</label>
           <Slider min={2} max={80} value={[magicWandTolerance]} onValueChange={([v]) => setMagicWandTolerance(v)} />
+          <p className="text-[11px] text-[var(--graphite)] leading-snug mt-1">
+            How similar a pixel's color must be to grow the selection. Spreading still stops at real edges
+            (shadows, trim, windows) regardless of this value — raising it does not select unrelated surfaces.
+          </p>
+
+          <label className="text-xs text-[var(--graphite)] mt-3 block">Edge smoothing — {magicWandFeather.toFixed(1)}px</label>
+          <Slider min={0} max={4} step={0.5} value={[magicWandFeather]} onValueChange={([v]) => setMagicWandFeather(v)} />
+          <p className="text-[11px] text-[var(--graphite)] leading-snug mt-1">
+            Softens the selection's outer edge only. Higher values reduce jagged edges; lower values keep
+            boundaries crisp against architectural detail.
+          </p>
+
+          <div className="mt-4 flex items-center justify-between gap-2">
+            <label htmlFor="magic-wand-debug" className="text-xs text-[var(--graphite)]">Debug: show mask stages</label>
+            <button
+              id="magic-wand-debug"
+              role="switch"
+              aria-checked={magicWandDebugEnabled}
+              onClick={() => setMagicWandDebugEnabled(!magicWandDebugEnabled)}
+              className={`relative h-5 w-9 rounded-full transition-colors ${magicWandDebugEnabled ? 'bg-[var(--signal)]' : 'bg-[var(--line)]'}`}
+            >
+              <span
+                className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${magicWandDebugEnabled ? 'translate-x-[18px]' : 'translate-x-0.5'}`}
+              />
+            </button>
+          </div>
+          {magicWandDebugEnabled && !magicWandDebug && (
+            <p className="text-[11px] text-[var(--graphite)] leading-snug mt-2">Click the wall with Magic Wand to capture a selection.</p>
+          )}
+          {magicWandDebugEnabled && magicWandDebug && (
+            <div className="mt-2 grid grid-cols-3 gap-1.5">
+              {[
+                ['Raw', magicWandDebug.raw],
+                ['Holes closed', magicWandDebug.closed],
+                ['Final (feathered)', magicWandDebug.final],
+              ].map(([label, src]) => (
+                <div key={label} className="flex flex-col gap-1">
+                  <img src={src} alt={label} className="w-full rounded-[var(--radius-sm)] border border-[var(--line)] bg-black/80" />
+                  <span className="text-[10px] text-[var(--graphite)] text-center leading-tight">{label}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       )}
 
